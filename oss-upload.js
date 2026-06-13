@@ -15,13 +15,19 @@ const client = new OSS({
   accessKeySecret: OSS_ACCESS_KEY_SECRET,
 })
 
-async function put() {
+async function main() {
   try {
-    const result = await client.put('bocchi.png', './bocchi.png')
+    const objectName = 'bocchi.png'
+    const localFilePath = './bocchi.png'
+
+    const result = await client.put(objectName, localFilePath)
+    console.log('Upload succeeded:')
     console.log(result)
-  } catch (e) {
-    console.log(e)
+  } catch (error) {
+    console.error('Upload failed:')
+    console.error(error)
+    process.exitCode = 1
   }
 }
 
-put()
+main()
