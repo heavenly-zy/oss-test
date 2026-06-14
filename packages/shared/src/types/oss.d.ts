@@ -14,15 +14,32 @@ export interface UploadResult {
     name: string;
     url: string;
 }
-export interface UploadCheckpoint {
-    file: File;
+export interface UploadFileMeta {
     name: string;
-    fileSize: number;
-    partSize: number;
-    uploadId: string;
+    size: number;
+    lastModified: number;
+    type?: string;
+}
+export interface UploadCheckpointData {
+    uploadId?: string;
+    fileSize?: number;
+    partSize?: number;
+    doneParts?: Array<{
+        number?: number;
+        etag?: string;
+    }>;
+    [key: string]: unknown;
+}
+export interface PersistedUploadCheckpoint {
+    version: 1;
+    fileId: string;
+    fileMeta: UploadFileMeta;
+    objectKey: string;
     bucket: string;
-    key: string;
-    loaded?: number;
+    region: string;
+    partSize: number;
+    updatedAt: number;
+    checkpoint: UploadCheckpointData;
 }
 export interface ApiResponse<T = unknown> {
     success: boolean;

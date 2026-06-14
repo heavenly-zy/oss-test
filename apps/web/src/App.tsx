@@ -12,7 +12,7 @@ function App() {
     setLogs((prev) => [...prev, `[${time}] ${message}`]);
   };
 
-  const { uploading, progress, upload } = useUpload({ onLog: addLog });
+  const { uploading, progress, resumeStatus, upload } = useUpload({ onLog: addLog });
 
   const handleUpload = async (file: File) => {
     addLog(`开始上传: ${file.name} (${formatSize(file.size)})`);
@@ -24,6 +24,15 @@ function App() {
     }
   };
 
+  const resumeHint =
+    resumeStatus === 'available'
+      ? '发现上次未完成的上传，已尝试从断点继续。'
+      : resumeStatus === 'resuming'
+        ? '正在从上次断点继续上传。'
+        : null;
+
+  const progressLabel = resumeStatus === 'resuming' ? '继续上传中' : '上传进度';
+
   return (
     <div className="max-w-2xl mx-auto py-10 px-5">
       <h1 className="text-2xl font-bold mb-2">阿里云 OSS 上传示例</h1>
@@ -31,9 +40,13 @@ function App() {
         支持分片上传、断点续传。文件直接上传到阿里云 OSS，不经过服务器。
       </p>
 
-      <FileUpload onUpload={handleUpload} disabled={uploading} />
+      <FileUpload
+        onUpload={handleUpload}
+        disabled={uploading}
+        resumeHint={resumeHint}
+      />
 
-      <UploadProgress percent={progress} />
+      <UploadProgress percent={progress} statusLabel={progressLabel} />
 
       <UploadLogs logs={logs} />
     </div>
