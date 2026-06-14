@@ -1,10 +1,13 @@
 {
   "name": "oss-test",
   "version": "1.0.0",
-  "description": "",
+  "description": "阿里云 OSS 浏览器端直传示例",
   "main": "oss-upload.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "keywords": [],
   "author": "",
@@ -12,6 +15,10 @@
   "type": "module",
   "dependencies": {
     "ali-oss": "^6.23.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2"
+  },
+  "devDependencies": {
+    "vite": "^8.0.16"
   }
 }

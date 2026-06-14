@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>阿里云 OSS 分片上传示例</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 0 20px;
+      }
+      .info {
+        background: #f5f5f5;
+        padding: 12px 16px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+      .progress-container {
+        margin: 16px 0;
+      }
+      .progress-bar {
+        width: 100%;
+        height: 24px;
+        background: #e0e0e0;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        background: #4caf50;
+        transition: width 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+      }
+      .progress-text {
+        margin-top: 8px;
+        font-size: 13px;
+        color: #666;
+      }
+      #log {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        padding: 16px;
+        border-radius: 6px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 12px;
+        max-height: 300px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .part-list {
+        max-height: 150px;
+        overflow-y: auto;
+        margin-top: 10px;
+        font-size: 12px;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>阿里云 OSS 分片上传示例</h1>
+
+    <div class="info">
+      <strong>说明：</strong>分片上传将大文件分割为多个小分片并发传输，适合上传大文件（>100MB）。
+      单个分片失败时仅需重传该分片，无需重新上传整个文件。
+    </div>
+
+    <!-- 文件选择输入 -->
+    <input id="fileInput" type="file" />
+    <button id="uploadBtn" disabled>开始上传</button>
+    <button id="cancelBtn" disabled>取消</button>
+
+    <!-- 上传状态提示 -->
+    <div class="progress-container" id="progressContainer" style="display: none;">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill" style="width: 0%">0%</div>
+      </div>
+      <div class="progress-text" id="progressText">准备上传...</div>
+    </div>
+
+    <div class="part-list" id="partList"></div>
+
+    <!-- 日志输出 -->
+    <h3>上传日志</h3>
+    <div id="log"></div>
+
+    <script>
+      const fileInput = document.getElementById('fileInput');
+      const uploadBtn = document.getElementById('uploadBtn');
+      const cancelBtn = document.getElementById('cancelBtn');
+      const progressContainer = document.getElementById('progressContainer');
+      const progressFill = document.getElementById('progressFill');
+      const progressText = document.getElementById('progressText');
+      const logEl = document.getElementById('log');
+      const partList = document.getElementById('partList');
+
+      let ossConfig = null;
+      let uploadId = null;
+      let objectKey = null;
+      let uploadedParts = [];
+      let isUploading = false;
+      let abortController = null;
+
+      // 配置：OSS 地域和 Bucket 名称
+      const OSS_REGION = 'oss-cn-beijing';
+      const OSS_BUCKET = 'gugugaga-bucket';
+      const PART_SIZE = 1024 * 1024; // 1MB per part
+
+      /**
+       * 向后端请求 OSS 上传凭证
+       */
+      async function fetchOSSInfo() {
+        const response = await fetch('/api/oss-token');
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || '获取凭证失败');
+        }
+        return result.data;
+      }
+
+      /**
+       * 请求后端初始化分片上传，获取 uploadId
+       */
+      async function initMultipartUpload(key) {
+        const response = await fetch('/api/init-multipart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || '初始化分片上传失败');
+        }
+        return result.data.uploadId;
+      }
+
+      /**
+       * 请求后端上传分片（后端直接处理）
+       */
+      async function uploadPartToServer(key, uploadId, partNumber, blob) {
+        // 将 blob 转换为 base64
+        const arrayBuffer = await blob.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+        const response = await fetch('/api/upload-part', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key,
+            uploadId,
+            partNumber,
+            data: base64,
+          }),
+        });
+
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || `分片 ${partNumber} 上传失败`);
+        }
+        return { partNumber, etag: result.data.etag };
+      }
+
+      /**
+       * 请求后端完成分片上传
+       */
+      async function completeMultipartUpload(key, uploadId, parts) {
+        const response = await fetch('/api/complete-multipart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, uploadId, parts }),
+        });
+        const result = await response.json();
+        if (!result.success) {
+          throw new Error(result.error || '完成分片上传失败');
+        }
+        return result.data;
+      }
+
+      function addLog(message) {
+        const time = new Date().toLocaleTimeString();
+        logEl.textContent += `[${time}] ${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function updateProgress(percent, text) {
+        progressFill.style.width = `${percent}%`;
+        progressFill.textContent = `${percent}%`;
+        progressText.textContent = text;
+      }
+
+      function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+      }
+
+      /**
+       * 计算文件分片
+       */
+      function calculateParts(file) {
+        const parts = [];
+        let start = 0;
+        let partNumber = 1;
+
+        while (start < file.size) {
+          const end = Math.min(start + PART_SIZE, file.size);
+          parts.push({
+            partNumber,
+            start,
+            end,
+            size: end - start,
+          });
+          start = end;
+          partNumber++;
+        }
+
+        return parts;
+      }
+
+      /**
+       * 上传单个分片（通过后端）
+       */
+      async function uploadPart(file, part, key, uploadId) {
+        const blob = file.slice(part.start, part.end);
+        return await uploadPartToServer(key, uploadId, part.partNumber, blob);
+      }
+
+      /**
+       * 分片上传主流程
+       */
+      async function multipartUpload(file) {
+        objectKey = `uploads/${Date.now()}_${file.name}`;
+        addLog(`开始分片上传: ${file.name} (${formatSize(file.size)})`);
+
+        // 1. 初始化分片上传
+        addLog('步骤 1: 初始化分片上传...');
+        uploadId = await initMultipartUpload(objectKey);
+        addLog(`获取到 UploadId: ${uploadId}`);
+
+        // 2. 计算分片并上传
+        const parts = calculateParts(file);
+        addLog(`步骤 2: 上传 ${parts.length} 个分片...`);
+
+        uploadedParts = [];
+        const concurrency = 2; // 并发数，减小以避免后端压力
+        let completed = 0;
+
+        for (let i = 0; i < parts.length; i += concurrency) {
+          if (!isUploading) {
+            throw new Error('上传已取消');
+          }
+
+          const batch = parts.slice(i, i + concurrency);
+          const results = await Promise.all(
+            batch.map(part =>
+              uploadPart(file, part, objectKey, uploadId)
+                .then(result => {
+                  completed++;
+                  uploadedParts.push(result);
+                  const percent = Math.round((completed / parts.length) * 100);
+                  updateProgress(percent, `已上传 ${completed}/${parts.length} 个分片`);
+                  addLog(`分片 ${result.partNumber} 上传成功`);
+                  return result;
+                })
+                .catch(err => {
+                  addLog(`分片 ${part.partNumber} 上传失败: ${err.message}`);
+                  throw err;
+                })
+            )
+          );
+        }
+
+        // 3. 完成分片上传
+        addLog('步骤 3: 完成分片上传...');
+        uploadedParts.sort((a, b) => a.partNumber - b.partNumber);
+
+        const result = await completeMultipartUpload(objectKey, uploadId, uploadedParts);
+        addLog(`上传成功!`);
+        addLog(`ETag: ${result.etag}`);
+        addLog(`URL: https://${OSS_BUCKET}.${OSS_REGION}.aliyuncs.com/${objectKey}`);
+
+        updateProgress(100, '上传完成!');
+        return result;
+      }
+
+      // 事件绑定
+      fileInput.addEventListener('change', () => {
+        uploadBtn.disabled = !fileInput.files?.length;
+      });
+
+      uploadBtn.addEventListener('click', async () => {
+        const [file] = fileInput.files;
+        if (!file) return;
+
+        isUploading = true;
+        uploadBtn.disabled = true;
+        cancelBtn.disabled = false;
+        fileInput.disabled = true;
+        progressContainer.style.display = 'block';
+        logEl.textContent = '';
+        partList.textContent = '';
+
+        try {
+          await multipartUpload(file);
+        } catch (err) {
+          if (err.message !== '上传已取消') {
+            addLog(`上传失败: ${err.message}`);
+            console.error('上传错误:', err);
+          }
+        } finally {
+          isUploading = false;
+          uploadBtn.disabled = false;
+          cancelBtn.disabled = true;
+          fileInput.disabled = false;
+        }
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        isUploading = false;
+        addLog('用户取消上传');
+      });
+    </script>
+  </body>
+</html>
