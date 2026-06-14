@@ -4,9 +4,11 @@
   "private": true,
   "packageManager": "pnpm@10.26.0",
   "scripts": {
-    "dev": "pnpm -r run --parallel dev",
+    "dev": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload run dev",
+    "dev:all": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload run dev",
     "dev:api": "pnpm --filter @oss-test/api dev",
     "dev:web": "pnpm --filter @oss-test/web dev",
+    "dev:post-upload": "pnpm --filter @oss-test/post-upload dev",
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "clean": "pnpm -r run clean"

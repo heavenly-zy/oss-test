@@ -3,9 +3,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import type { Context } from 'hono';
-import pkg from 'ali-oss';
-const { STS } = pkg;
-import type { OSSTokenResponse } from '@oss-test/shared';
+import OSS from 'ali-oss';
+const { STS } = OSS;
+import type { OSSPostPolicyResponse, OSSTokenResponse } from '@oss-test/shared';
+import { createPostPolicy, validatePostPolicyEnv } from './post-policy';
 
 const app = new Hono();
 
@@ -24,6 +25,8 @@ if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET || !ROLE_ARN) {
   console.error('  ROLE_ARN - RAM 角色的 ARN');
   process.exit(1);
 }
+
+validatePostPolicyEnv();
 
 /**
  * 获取 OSS 上传用的临时凭证
@@ -83,6 +86,27 @@ app.get('/api/oss-token', async (c: Context) => {
       {
         success: false,
         message: '获取凭证失败',
+        error: error instanceof Error ? error.message : '未知错误',
+      },
+      500
+    );
+  }
+});
+
+app.get('/api/oss-post-policy', async (c: Context) => {
+  try {
+    const policy = await createPostPolicy();
+    const response: OSSPostPolicyResponse = {
+      success: true,
+      data: policy,
+    };
+    return c.json(response);
+  } catch (error) {
+    console.error('获取 OSS POST Policy 失败:', error);
+    return c.json(
+      {
+        success: false,
+        message: '获取表单直传签名失败',
         error: error instanceof Error ? error.message : '未知错误',
       },
       500

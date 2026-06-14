@@ -13,6 +13,26 @@ export interface OSSToken {
   expiration: string;
 }
 
+export interface OSSPostPolicyFields {
+  policy: string;
+  xOssSignature: string;
+  xOssSignatureVersion: 'OSS4-HMAC-SHA256';
+  xOssCredential: string;
+  xOssDate: string;
+  xOssSecurityToken: string;
+  successActionStatus: '200';
+  xOssForbidOverwrite: 'true' | 'false';
+}
+
+export interface OSSPostPolicy {
+  host: string;
+  dir: string;
+  expireAt: string;
+  maxSize: number;
+  keyPrefix: string;
+  fields: OSSPostPolicyFields;
+}
+
 // 上传结果
 export interface UploadResult {
   etag: string;
@@ -60,6 +80,7 @@ export interface ApiResponse<T = unknown> {
 
 // OSS Token 响应
 export type OSSTokenResponse = ApiResponse<OSSToken>;
+export type OSSPostPolicyResponse = ApiResponse<OSSPostPolicy>;
 
 // 上传进度
 export interface UploadProgress {

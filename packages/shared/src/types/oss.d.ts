@@ -9,6 +9,24 @@ export interface OSSToken {
     stsToken: string;
     expiration: string;
 }
+export interface OSSPostPolicyFields {
+    policy: string;
+    xOssSignature: string;
+    xOssSignatureVersion: 'OSS4-HMAC-SHA256';
+    xOssCredential: string;
+    xOssDate: string;
+    xOssSecurityToken: string;
+    successActionStatus: '200';
+    xOssForbidOverwrite: 'true' | 'false';
+}
+export interface OSSPostPolicy {
+    host: string;
+    dir: string;
+    expireAt: string;
+    maxSize: number;
+    keyPrefix: string;
+    fields: OSSPostPolicyFields;
+}
 export interface UploadResult {
     etag: string;
     name: string;
@@ -48,6 +66,7 @@ export interface ApiResponse<T = unknown> {
     error?: string;
 }
 export type OSSTokenResponse = ApiResponse<OSSToken>;
+export type OSSPostPolicyResponse = ApiResponse<OSSPostPolicy>;
 export interface UploadProgress {
     percent: number;
     uploaded: number;

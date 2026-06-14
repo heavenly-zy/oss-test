@@ -36,8 +36,15 @@ function App() {
   return (
     <div className="max-w-2xl mx-auto py-10 px-5">
       <h1 className="text-2xl font-bold mb-2">阿里云 OSS 上传示例</h1>
-      <p className="text-gray-600 mb-6">
+      <p className="text-gray-600 mb-2">
         支持分片上传、断点续传。文件直接上传到阿里云 OSS，不经过服务器。
+      </p>
+      <p className="text-sm text-gray-500 mb-6">
+        如需查看 POST Policy / 表单直传独立 demo，请访问{' '}
+        <a className="text-blue-600 underline" href="http://localhost:5174" target="_blank" rel="noreferrer">
+          http://localhost:5174
+        </a>
+        。
       </p>
 
       <FileUpload
