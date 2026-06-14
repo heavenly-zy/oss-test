@@ -425,6 +425,53 @@ await fetch(policy.host, {
 })
 ```
 
+### 服务端生成签名材料的几种常见写法
+
+上面的示例只展示了浏览器端如何提交表单。真正落地时，POST Policy 的差异主要发生在服务端：同样是返回一组可提交字段，背后既可以用 `calculatePostSignature`，也可以手工签名，或者走 STS + V4 表单字段。
+
+在 Node.js + `ali-oss` SDK 的场景里，服务端确实可以像官方示例那样直接调用 `calculatePostSignature` 来生成表单直传所需字段：
+
+```ts
+const OSS = require('ali-oss')
+
+const client = new OSS({
+  accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+  accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+  bucket: '<YOUR_BUCKET>',
+})
+
+const policy = {
+  expiration: new Date(Date.now() + 3600 * 1000).toISOString(),
+  conditions: [
+    ['content-length-range', 0, 1048576000],
+    { bucket: client.options.bucket },
+  ],
+}
+
+const formData = await client.calculatePostSignature(policy)
+```
+
+这是官方文档给出的一个 Node.js 实现示例，但它并不是 POST Policy 的唯一服务端实现方式。按照官方文档，常见实现大致可以分为三类：
+
+- **SDK 辅助生成签名材料**
+  - 例如使用 `calculatePostSignature`
+- **手工构造 policy 并自行计算签名**
+  - 服务端自行组装 JSON policy、做 Base64 编码，再用 HMAC 计算签名
+  - `docs/在客户端直接上传文件到OSS.md` 里的 Python、Go、PHP 示例都属于这一类
+- **先获取 STS 临时凭证，再返回 V4 表单字段**
+  - 例如返回 `x-oss-signature`、`x-oss-credential`、`x-oss-date`、`x-oss-security-token`
+  - `docs/服务端签名直传.md` 展示的就是这种更贴近当前官方推荐的形式
+
+因此，更稳妥的理解是：`calculatePostSignature` 是“服务端生成 PostObject 所需签名材料”的一种实现手段，而不是 POST Policy 方案本身。
+
+对前端来说，真正稳定的接口契约始终是：
+
+- 向业务服务器请求一组可提交的表单字段
+- 按要求把这些字段填入 `FormData`
+- 把 `file` 作为最后一个字段提交到 OSS
+
+只要服务端最终返回的字段满足 OSS 表单直传要求，前端上传模型就不变。
+
 这条路径特别适合：
 
 - 官网表单收件
