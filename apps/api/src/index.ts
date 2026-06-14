@@ -1,15 +1,21 @@
-import express from 'express';
+import 'dotenv/config';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { serve } from '@hono/node-server';
+import type { Context } from 'hono';
 import pkg from 'ali-oss';
 const { STS } = pkg;
-import 'dotenv/config';
+import type { OSSTokenResponse } from '@oss-test/shared';
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const app = new Hono();
 
-// 读取环境变量配置
-const ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID;
-const ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET;
-const ROLE_ARN = process.env.ROLE_ARN;
+// CORS
+app.use('*', cors());
+
+// 环境变量检查
+const ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID!;
+const ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET!;
+const ROLE_ARN = process.env.ROLE_ARN!;
 
 if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET || !ROLE_ARN) {
   console.error('请在 .env 文件中配置以下环境变量:');
@@ -47,7 +53,12 @@ async function getOSSToken() {
     ],
   };
 
-  const result = await stsClient.assumeRole(ROLE_ARN, policy, 3600, `oss-upload-${Date.now()}`);
+  const result = await stsClient.assumeRole(
+    ROLE_ARN,
+    policy,
+    3600,
+    `oss-upload-${Date.now()}`
+  );
 
   return {
     accessKeyId: result.credentials.AccessKeyId,
@@ -57,28 +68,36 @@ async function getOSSToken() {
   };
 }
 
-// API: 获取 OSS 临时凭证
-app.get('/api/oss-token', async (req, res) => {
+// GET /api/oss-token - 获取 OSS 临时凭证
+app.get('/api/oss-token', async (c: Context) => {
   try {
     const token = await getOSSToken();
-    res.json({
+    const response: OSSTokenResponse = {
       success: true,
       data: token,
-    });
+    };
+    return c.json(response);
   } catch (error) {
     console.error('获取 OSS Token 失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取凭证失败',
-      error: error.message,
-    });
+    return c.json(
+      {
+        success: false,
+        message: '获取凭证失败',
+        error: error instanceof Error ? error.message : '未知错误',
+      },
+      500
+    );
   }
 });
 
-// 提供静态文件
-app.use(express.static('.'));
+// 健康检查
+app.get('/health', (c: Context) => c.json({ status: 'ok' }));
 
-app.listen(PORT, () => {
-  console.log(`后端服务已启动: http://localhost:${PORT}`);
-  console.log(`前端开发服务器: pnpm dev (端口 5173)`);
+const port = Number(process.env.PORT) || 3000;
+
+console.log(`API 服务已启动: http://localhost:${port}`);
+
+serve({
+  fetch: app.fetch,
+  port,
 });

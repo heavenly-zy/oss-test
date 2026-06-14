@@ -1,24 +1,14 @@
 {
   "name": "oss-test",
   "version": "1.0.0",
-  "description": "阿里云 OSS 浏览器端直传示例",
-  "main": "oss-upload.js",
+  "private": true,
+  "packageManager": "pnpm@10.26.0",
   "scripts": {
-    "start": "node server.js",
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "dependencies": {
-    "ali-oss": "^6.23.0",
-    "dotenv": "^17.4.2",
-    "express": "^4.22.2"
-  },
-  "devDependencies": {
-    "vite": "^8.0.16"
+    "dev": "pnpm -r run --parallel dev",
+    "dev:api": "pnpm --filter @oss-test/api dev",
+    "dev:web": "pnpm --filter @oss-test/web dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r run clean"
   }
 }
