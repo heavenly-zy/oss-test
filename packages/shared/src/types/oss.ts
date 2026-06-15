@@ -34,6 +34,22 @@ export interface OSSPostPolicy {
 }
 
 // 上传结果
+export type CloudProvider = 'oss' | 'aws';
+
+export interface UploadToken {
+  provider: CloudProvider;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+  expiration: string;
+  bucket: string;
+  region: string;
+  objectKey: string;
+  endpoint?: string;
+  publicBaseUrl?: string;
+  objectUrl?: string;
+}
+
 export interface UploadResult {
   etag: string;
   name: string;
@@ -81,6 +97,33 @@ export interface ApiResponse<T = unknown> {
 // OSS Token 响应
 export type OSSTokenResponse = ApiResponse<OSSToken>;
 export type OSSPostPolicyResponse = ApiResponse<OSSPostPolicy>;
+export type UploadTokenResponse = ApiResponse<UploadToken>;
+
+export type UploadStatus =
+  | 'idle'
+  | 'requestingToken'
+  | 'uploading'
+  | 'success'
+  | 'error'
+  | 'cancelled';
+
+export interface UploadLogEntry {
+  level: 'info' | 'success' | 'error';
+  message: string;
+  time: string;
+}
+
+export interface S3UploadResult {
+  provider: CloudProvider;
+  bucket: string;
+  region: string;
+  objectKey: string;
+  endpoint?: string;
+  objectUrl?: string;
+  eTag?: string;
+  location?: string;
+  durationMs: number;
+}
 
 // 上传进度
 export interface UploadProgress {

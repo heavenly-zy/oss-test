@@ -5,8 +5,18 @@ import { serve } from '@hono/node-server';
 import type { Context } from 'hono';
 import OSS from 'ali-oss';
 const { STS } = OSS;
-import type { OSSPostPolicyResponse, OSSTokenResponse } from '@oss-test/shared';
+import type {
+  OSSPostPolicyResponse,
+  OSSTokenResponse,
+  UploadTokenResponse,
+} from '@oss-test/shared';
 import { createPostPolicy, validatePostPolicyEnv } from './post-policy';
+import {
+  createUploadToken,
+  normalizeUploadQuery,
+  UploadTokenError,
+  validateUploadTokenEnv,
+} from './upload-token';
 
 const app = new Hono();
 
@@ -27,6 +37,7 @@ if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET || !ROLE_ARN) {
 }
 
 validatePostPolicyEnv();
+validateUploadTokenEnv();
 
 /**
  * 获取 OSS 上传用的临时凭证
@@ -90,6 +101,39 @@ app.get('/api/oss-token', async (c: Context) => {
       },
       500
     );
+  }
+});
+
+app.get('/api/upload-token', async (c: Context) => {
+  try {
+    const query = normalizeUploadQuery({
+      fileName: c.req.query('fileName'),
+      contentType: c.req.query('contentType'),
+      size: c.req.query('size'),
+    });
+    const token = await createUploadToken(query);
+    const response: UploadTokenResponse = {
+      success: true,
+      data: token,
+    };
+    return c.json(response);
+  } catch (error) {
+    console.error('Get upload token failed:', error);
+    const isKnownError = error instanceof UploadTokenError;
+    const status = isKnownError ? error.status : 500;
+    const response: UploadTokenResponse = {
+      success: false,
+      message: isKnownError ? error.message : 'Failed to get upload token',
+      error: isKnownError
+        ? error.detail ?? error.message
+        : error instanceof Error
+          ? error.message
+          : 'Unknown error',
+    };
+
+    if (status === 400) return c.json(response, 400);
+    if (status === 413) return c.json(response, 413);
+    return c.json(response, 500);
   }
 });
 
