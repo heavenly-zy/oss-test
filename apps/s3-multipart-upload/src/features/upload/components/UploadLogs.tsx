@@ -1,6 +1,6 @@
-import type { UploadLogEntry } from '@/hooks/useS3MultipartUpload';
-import { formatTime } from '@/utils/format';
-import { LOG_LEVEL_LABELS } from '@/utils/labels';
+import type { UploadLogEntry } from '@/features/upload/types';
+import { LOG_LEVEL_LABELS } from '@/i18n/messages/upload';
+import { formatTime } from '../utils/format';
 
 interface UploadLogsProps {
   logs: UploadLogEntry[];

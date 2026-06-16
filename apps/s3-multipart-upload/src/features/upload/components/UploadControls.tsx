@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { UploadStatus } from '@/hooks/useS3MultipartUpload';
+import type { UploadStatus } from '@/features/upload/types';
 
 interface UploadControlsProps {
   status: UploadStatus;

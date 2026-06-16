@@ -6,9 +6,9 @@ import {
   ResultPanel,
   UploadControls,
   UploadLogs,
-} from './components';
-import { useS3MultipartUpload } from './hooks/useS3MultipartUpload';
-import { STATUS_LABELS } from './utils/labels';
+} from '@/features/upload/components';
+import { useS3MultipartUpload } from '@/features/upload/hooks/useS3MultipartUpload';
+import { STATUS_LABELS } from '@/i18n/messages/upload';
 
 function App() {
   const upload = useS3MultipartUpload();

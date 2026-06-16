@@ -1,5 +1,5 @@
-import type { RuntimeConfig } from '@/config';
-import { formatBytes } from '@/utils/format';
+import type { RuntimeConfig } from '@/libs/s3-upload';
+import { formatBytes } from '../utils/format';
 
 interface ConfigPanelProps {
   config: RuntimeConfig;

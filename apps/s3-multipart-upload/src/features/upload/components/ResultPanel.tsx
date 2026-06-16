@@ -1,7 +1,7 @@
-import type { UploadResult } from '@/lib/types';
-import type { UploadStatus } from '@/hooks/useS3MultipartUpload';
-import { formatDuration } from '@/utils/format';
-import { MODE_LABELS } from '@/utils/labels';
+import type { UploadStatus } from '@/features/upload/types';
+import { MODE_LABELS } from '@/i18n/messages/upload';
+import type { UploadResult } from '@/libs/s3-upload';
+import { formatDuration } from '../utils/format';
 
 interface ResultPanelProps {
   status: UploadStatus;

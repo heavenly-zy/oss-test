@@ -1,6 +1,5 @@
-import type { UploadStatus } from '@/hooks/types';
-import type { UploadMode, UploadPhase } from '@/lib/types';
-import type { UploadLogEntry } from '@/hooks/types';
+import type { UploadStatus, UploadLogEntry } from '@/features/upload/types';
+import type { UploadMode, UploadPhase } from '@/libs/s3-upload';
 
 export const STATUS_LABELS: Record<UploadStatus, string> = {
   idle: '待上传',

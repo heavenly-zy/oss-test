@@ -24,7 +24,7 @@ import {
   listUploadedParts,
   putObject,
   uploadPart,
-} from './s3Requests';
+} from '../s3/s3Requests';
 import type {
   MultipartCheckpoint,
   RunMultipartOptions,

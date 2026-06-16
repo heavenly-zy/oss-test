@@ -1,5 +1,4 @@
-import type { readRuntimeConfig } from '@/config';
-import type { MultipartCheckpoint, UploadProgressEvent, UploadResult } from '@/lib/types';
+import type { MultipartCheckpoint, RuntimeConfig, UploadProgressEvent, UploadResult } from '@/libs/s3-upload';
 
 /** 页面级上传状态。 */
 export type UploadStatus =
@@ -23,7 +22,7 @@ export interface UploadLogEntry {
 /** 上传 Demo hook 暴露给页面组件的全部状态与动作。 */
 export interface UseS3MultipartUploadReturn {
   /** 前端运行时配置。 */
-  config: ReturnType<typeof readRuntimeConfig>;
+  config: RuntimeConfig;
   /** 当前上传状态。 */
   status: UploadStatus;
   /** 当前选择的文件。 */

@@ -1,5 +1,5 @@
-import type { MultipartCheckpoint } from '@/lib/types';
-import { formatBytes, formatTime } from '@/utils/format';
+import type { MultipartCheckpoint } from '@/libs/s3-upload';
+import { formatBytes, formatTime } from '../utils/format';
 
 interface CheckpointPanelProps {
   checkpoint: MultipartCheckpoint | null;

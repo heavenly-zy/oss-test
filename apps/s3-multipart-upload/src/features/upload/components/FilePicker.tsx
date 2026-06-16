@@ -1,5 +1,5 @@
 import { useCallback, useId, useRef } from 'react';
-import { formatBytes } from '@/utils/format';
+import { formatBytes } from '../utils/format';
 
 interface FilePickerProps {
   file: File | null;

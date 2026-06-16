@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { UploadProgressEvent } from '@/lib/types';
+import type { UploadProgressEvent } from '@/libs/s3-upload';
 
 /**
  * 普通 PutObject 上传的 UI 进度模拟。

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import type { UploadLogEntry } from './types';
+import type { UploadLogEntry } from '../types';
 
 /**
  * 上传日志状态封装。

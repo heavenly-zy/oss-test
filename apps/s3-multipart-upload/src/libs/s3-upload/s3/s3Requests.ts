@@ -10,9 +10,14 @@ import {
   type Part,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { SIGN_URL_MAX_EXPIRE_SECONDS } from './constants';
-import { stripEndpointPrefix } from './objectKey';
-import type { RunMultipartOptions, S3MultipartUploadConfig, S3StsToken, StoredPart } from './types';
+import { SIGN_URL_MAX_EXPIRE_SECONDS } from '../core/constants';
+import { stripEndpointPrefix } from '../core/objectKey';
+import type {
+  RunMultipartOptions,
+  S3MultipartUploadConfig,
+  S3StsToken,
+  StoredPart,
+} from '../core/types';
 
 /**
  * 将 Blob/File 转为 AWS SDK v3 在浏览器端最稳定的字节数组请求体。

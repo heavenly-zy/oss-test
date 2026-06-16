@@ -1,14 +1,19 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { readRuntimeConfig } from '@/config';
-import { S3MultipartUpload, S3_UPLOAD_EVENTS } from '@/lib/S3MultipartUpload';
-import type { MultipartCheckpoint, UploadIdEvent, UploadProgressEvent, UploadResult } from '@/lib/types';
-import { loadCheckpoint, removeCheckpoint, saveCheckpoint } from '@/utils/checkpointStore';
-import { toReadableError } from '@/utils/format';
-import { INITIAL_PROGRESS, type UploadStatus, type UseS3MultipartUploadReturn } from './types';
+import {
+  loadCheckpoint,
+  readRuntimeConfig,
+  removeCheckpoint,
+  S3MultipartUpload,
+  S3_UPLOAD_EVENTS,
+  saveCheckpoint,
+} from '@/libs/s3-upload';
+import type { MultipartCheckpoint, UploadIdEvent, UploadProgressEvent, UploadResult } from '@/libs/s3-upload';
+import { toReadableError } from '../utils/format';
+import { INITIAL_PROGRESS, type UploadStatus, type UseS3MultipartUploadReturn } from '../types';
 import { useSimpleUploadProgress } from './useSimpleUploadProgress';
 import { useUploadLogger } from './useUploadLogger';
 
-export type { UploadLogEntry, UploadStatus } from './types';
+export type { UploadLogEntry, UploadStatus } from '../types';
 
 /**
  * 页面级上传状态管理 Hook。

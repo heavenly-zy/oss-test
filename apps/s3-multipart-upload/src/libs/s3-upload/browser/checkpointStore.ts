@@ -1,4 +1,4 @@
-import type { MultipartCheckpoint } from '@/lib/types';
+import type { MultipartCheckpoint } from '../core/types';
 
 const STORAGE_PREFIX = 's3-multipart-upload:checkpoint:';
 

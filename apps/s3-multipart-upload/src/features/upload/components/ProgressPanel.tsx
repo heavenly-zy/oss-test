@@ -1,7 +1,7 @@
-import type { UploadProgressEvent } from '@/lib/types';
-import type { UploadStatus } from '@/hooks/useS3MultipartUpload';
-import { formatBytes } from '@/utils/format';
-import { PHASE_LABELS, STATUS_LABELS } from '@/utils/labels';
+import type { UploadStatus } from '@/features/upload/types';
+import { PHASE_LABELS, STATUS_LABELS } from '@/i18n/messages/upload';
+import type { UploadProgressEvent } from '@/libs/s3-upload';
+import { formatBytes } from '../utils/format';
 
 interface ProgressPanelProps {
   status: UploadStatus;
