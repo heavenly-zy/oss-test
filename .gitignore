@@ -4,3 +4,4 @@ node_modules
 .env.*
 !apps/api/.env.example
 !apps/web/.env.example
+!apps/s3-multipart-upload/.env.example

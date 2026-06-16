@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import OSS from 'ali-oss';
 const { STS } = OSS;
 import { createPostPolicy, validatePostPolicyEnv } from './post-policy';
+import { createUploadToken, normalizeUploadQuery, UploadTokenError, validateUploadTokenEnv, } from './upload-token';
 const app = new Hono();
 // CORS
 app.use('*', cors());
@@ -20,6 +21,7 @@ if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET || !ROLE_ARN) {
     process.exit(1);
 }
 validatePostPolicyEnv();
+validateUploadTokenEnv();
 /**
  * 获取 OSS 上传用的临时凭证
  */
@@ -28,7 +30,29 @@ async function getOSSToken() {
         accessKeyId: ACCESS_KEY_ID,
         accessKeySecret: ACCESS_KEY_SECRET,
     });
-    const policy = {
+    const result = await stsClient.assumeRole(ROLE_ARN, createMultipartUploadPolicy(), 3600, `oss-upload-${Date.now()}`);
+    return {
+        accessKeyId: result.credentials.AccessKeyId,
+        accessKeySecret: result.credentials.AccessKeySecret,
+        stsToken: result.credentials.SecurityToken,
+        expiration: result.credentials.Expiration,
+    };
+}
+// GET /api/oss-token - 获取 OSS 临时凭证
+async function getS3StsToken() {
+    const stsClient = new STS({
+        accessKeyId: ACCESS_KEY_ID,
+        accessKeySecret: ACCESS_KEY_SECRET,
+    });
+    const result = await stsClient.assumeRole(ROLE_ARN, createMultipartUploadPolicy(), 3600, `s3-multipart-upload-${Date.now()}`);
+    return {
+        securityToken: result.credentials.SecurityToken,
+        accessKeyId: result.credentials.AccessKeyId,
+        accessKeySecret: result.credentials.AccessKeySecret,
+    };
+}
+function createMultipartUploadPolicy() {
+    return {
         Version: '1',
         Statement: [
             {
@@ -38,6 +62,7 @@ async function getOSSToken() {
                     'oss:PutObjectACL',
                     'oss:InitiateMultipartUpload',
                     'oss:UploadPart',
+                    'oss:ListParts',
                     'oss:CompleteMultipartUpload',
                     'oss:AbortMultipartUpload',
                     'oss:GetObject',
@@ -46,15 +71,7 @@ async function getOSSToken() {
             },
         ],
     };
-    const result = await stsClient.assumeRole(ROLE_ARN, policy, 3600, `oss-upload-${Date.now()}`);
-    return {
-        accessKeyId: result.credentials.AccessKeyId,
-        accessKeySecret: result.credentials.AccessKeySecret,
-        stsToken: result.credentials.SecurityToken,
-        expiration: result.credentials.Expiration,
-    };
 }
-// GET /api/oss-token - 获取 OSS 临时凭证
 app.get('/api/oss-token', async (c) => {
     try {
         const token = await getOSSToken();
@@ -71,6 +88,52 @@ app.get('/api/oss-token', async (c) => {
             message: '获取凭证失败',
             error: error instanceof Error ? error.message : '未知错误',
         }, 500);
+    }
+});
+app.get('/api/s3-sts-token', async (c) => {
+    try {
+        return c.json(await getS3StsToken());
+    }
+    catch (error) {
+        console.error('Get S3 STS token failed:', error);
+        return c.json({
+            message: 'Failed to get S3 STS token',
+            error: error instanceof Error ? error.message : 'Unknown error',
+        }, 500);
+    }
+});
+app.get('/api/upload-token', async (c) => {
+    try {
+        const query = normalizeUploadQuery({
+            fileName: c.req.query('fileName'),
+            contentType: c.req.query('contentType'),
+            size: c.req.query('size'),
+        });
+        const token = await createUploadToken(query);
+        const response = {
+            success: true,
+            data: token,
+        };
+        return c.json(response);
+    }
+    catch (error) {
+        console.error('Get upload token failed:', error);
+        const isKnownError = error instanceof UploadTokenError;
+        const status = isKnownError ? error.status : 500;
+        const response = {
+            success: false,
+            message: isKnownError ? error.message : 'Failed to get upload token',
+            error: isKnownError
+                ? error.detail ?? error.message
+                : error instanceof Error
+                    ? error.message
+                    : 'Unknown error',
+        };
+        if (status === 400)
+            return c.json(response, 400);
+        if (status === 413)
+            return c.json(response, 413);
+        return c.json(response, 500);
     }
 });
 app.get('/api/oss-post-policy', async (c) => {

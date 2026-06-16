@@ -4,12 +4,13 @@
   "private": true,
   "packageManager": "pnpm@10.26.0",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload --filter @oss-test/upload run dev",
-    "dev:all": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload --filter @oss-test/upload run dev",
+    "dev": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload --filter @oss-test/upload --filter @oss-test/s3-multipart-upload run dev",
+    "dev:all": "pnpm -r --parallel --filter @oss-test/api --filter @oss-test/web --filter @oss-test/post-upload --filter @oss-test/upload --filter @oss-test/s3-multipart-upload run dev",
     "dev:api": "pnpm --filter @oss-test/api dev",
     "dev:web": "pnpm --filter @oss-test/web dev",
     "dev:post-upload": "pnpm --filter @oss-test/post-upload dev",
     "dev:upload": "pnpm --filter @oss-test/upload dev",
+    "dev:s3-multipart-upload": "pnpm --filter @oss-test/s3-multipart-upload dev",
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "clean": "pnpm -r run clean"

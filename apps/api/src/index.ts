@@ -48,28 +48,9 @@ async function getOSSToken() {
     accessKeySecret: ACCESS_KEY_SECRET,
   });
 
-  const policy = {
-    Version: '1',
-    Statement: [
-      {
-        Effect: 'Allow',
-        Action: [
-          'oss:PutObject',
-          'oss:PutObjectACL',
-          'oss:InitiateMultipartUpload',
-          'oss:UploadPart',
-          'oss:CompleteMultipartUpload',
-          'oss:AbortMultipartUpload',
-          'oss:GetObject',
-        ],
-        Resource: 'acs:oss:*:*:*',
-      },
-    ],
-  };
-
   const result = await stsClient.assumeRole(
     ROLE_ARN,
-    policy,
+    createMultipartUploadPolicy(),
     3600,
     `oss-upload-${Date.now()}`
   );
@@ -82,7 +63,49 @@ async function getOSSToken() {
   };
 }
 
-// GET /api/oss-token - 获取 OSS 临时凭证
+// Return the article-compatible STS shape used by the S3 multipart demo.
+async function getS3StsToken() {
+  const stsClient = new STS({
+    accessKeyId: ACCESS_KEY_ID,
+    accessKeySecret: ACCESS_KEY_SECRET,
+  });
+
+  const result = await stsClient.assumeRole(
+    ROLE_ARN,
+    createMultipartUploadPolicy(),
+    3600,
+    `s3-multipart-upload-${Date.now()}`
+  );
+
+  return {
+    securityToken: result.credentials.SecurityToken,
+    accessKeyId: result.credentials.AccessKeyId,
+    accessKeySecret: result.credentials.AccessKeySecret,
+  };
+}
+
+function createMultipartUploadPolicy() {
+  return {
+    Version: '1',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: [
+          'oss:PutObject',
+          'oss:PutObjectACL',
+          'oss:InitiateMultipartUpload',
+          'oss:UploadPart',
+          'oss:ListParts',
+          'oss:CompleteMultipartUpload',
+          'oss:AbortMultipartUpload',
+          'oss:GetObject',
+        ],
+        Resource: 'acs:oss:*:*:*',
+      },
+    ],
+  };
+}
+
 app.get('/api/oss-token', async (c: Context) => {
   try {
     const token = await getOSSToken();
@@ -98,6 +121,21 @@ app.get('/api/oss-token', async (c: Context) => {
         success: false,
         message: '获取凭证失败',
         error: error instanceof Error ? error.message : '未知错误',
+      },
+      500
+    );
+  }
+});
+
+app.get('/api/s3-sts-token', async (c: Context) => {
+  try {
+    return c.json(await getS3StsToken());
+  } catch (error) {
+    console.error('Get S3 STS token failed:', error);
+    return c.json(
+      {
+        message: 'Failed to get S3 STS token',
+        error: error instanceof Error ? error.message : 'Unknown error',
       },
       500
     );
