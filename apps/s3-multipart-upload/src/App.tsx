@@ -32,7 +32,7 @@ function App() {
 
         {!configReady ? (
           <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            缺少前端环境变量：{upload.config.missingKeys.join(', ')}
+            上传配置未就绪：{upload.config.missingKeys.join(', ')}
           </section>
         ) : null}
 

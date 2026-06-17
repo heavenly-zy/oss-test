@@ -27,6 +27,7 @@ app.use('*', cors());
 const ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID!;
 const ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET!;
 const ROLE_ARN = process.env.ROLE_ARN!;
+const DEFAULT_S3_BASE_PATH = 'uploads/';
 
 if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET || !ROLE_ARN) {
   console.error('请在 .env 文件中配置以下环境变量:');
@@ -63,8 +64,24 @@ async function getOSSToken() {
   };
 }
 
-// Return the article-compatible STS shape used by the S3 multipart demo.
+interface S3UploadConfig {
+  bucket: string;
+  region: string;
+  endpoint: string | null;
+  basePath: string;
+  publicBaseUrl: string | null;
+  forcePathStyle: boolean;
+}
+
+class S3UploadConfigError extends Error {
+  constructor(public readonly missingFields: string[]) {
+    super(`Missing ${missingFields.join(', ')}`);
+  }
+}
+
+// Return STS credentials with the upload target used by the S3 multipart demo.
 async function getS3StsToken() {
+  const uploadConfig = getS3UploadConfig();
   const stsClient = new STS({
     accessKeyId: ACCESS_KEY_ID,
     accessKeySecret: ACCESS_KEY_SECRET,
@@ -72,16 +89,102 @@ async function getS3StsToken() {
 
   const result = await stsClient.assumeRole(
     ROLE_ARN,
-    createMultipartUploadPolicy(),
+    createS3MultipartUploadPolicy(uploadConfig),
     3600,
     `s3-multipart-upload-${Date.now()}`
   );
 
   return {
-    securityToken: result.credentials.SecurityToken,
-    accessKeyId: result.credentials.AccessKeyId,
-    accessKeySecret: result.credentials.AccessKeySecret,
+    credentials: {
+      securityToken: result.credentials.SecurityToken,
+      accessKeyId: result.credentials.AccessKeyId,
+      accessKeySecret: result.credentials.AccessKeySecret,
+    },
+    upload: uploadConfig,
   };
+}
+
+function getS3UploadConfig(): S3UploadConfig {
+  const bucket = readOptionalEnv('OSS_BUCKET');
+  const region = readOptionalEnv('OSS_REGION');
+  const endpoint = getS3Endpoint(region);
+  const basePath = normalizeBasePath(
+    readOptionalEnv('S3_BASE_PATH') ??
+      readOptionalEnv('OSS_UPLOAD_DIR') ??
+      DEFAULT_S3_BASE_PATH
+  );
+  const publicBaseUrl = normalizeOptionalUrl(
+    readOptionalEnv('S3_PUBLIC_BASE_URL') ?? readOptionalEnv('PUBLIC_BASE_URL')
+  );
+  const forcePathStyle = readBooleanEnv('S3_FORCE_PATH_STYLE', false);
+  const missingFields = [
+    !bucket ? 'bucket' : '',
+    !region ? 'region' : '',
+  ].filter(Boolean);
+
+  if (missingFields.length > 0) {
+    throw new S3UploadConfigError(missingFields);
+  }
+
+  return {
+    bucket: bucket!,
+    region: region!,
+    endpoint,
+    basePath,
+    publicBaseUrl,
+    forcePathStyle,
+  };
+}
+
+function getS3Endpoint(region: string | undefined): string | null {
+  const configuredEndpoint = normalizeOptionalUrl(process.env.S3_ENDPOINT);
+  if (configuredEndpoint) return configuredEndpoint;
+
+  return region ? `https://s3.${region}.aliyuncs.com` : null;
+}
+
+function createS3MultipartUploadPolicy(config: S3UploadConfig) {
+  return {
+    Version: '1',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: [
+          'oss:PutObject',
+          'oss:PutObjectACL',
+          'oss:InitiateMultipartUpload',
+          'oss:UploadPart',
+          'oss:ListParts',
+          'oss:CompleteMultipartUpload',
+          'oss:AbortMultipartUpload',
+          'oss:GetObject',
+        ],
+        Resource: `acs:oss:*:*:${config.bucket}/${config.basePath}*`,
+      },
+    ],
+  };
+}
+
+function readOptionalEnv(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value || undefined;
+}
+
+function readBooleanEnv(key: string, fallback: boolean): boolean {
+  const value = readOptionalEnv(key);
+  if (value === undefined) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+}
+
+function normalizeOptionalUrl(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, '');
+}
+
+function normalizeBasePath(value: string): string {
+  const normalized = value.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  return normalized ? `${normalized}/` : '';
 }
 
 function createMultipartUploadPolicy() {
@@ -129,9 +232,21 @@ app.get('/api/oss-token', async (c: Context) => {
 
 app.get('/api/s3-sts-token', async (c: Context) => {
   try {
-    return c.json(await getS3StsToken());
+    return c.json(await getS3StsToken(), 200, {
+      'Cache-Control': 'no-store',
+    });
   } catch (error) {
     console.error('Get S3 STS token failed:', error);
+    if (error instanceof S3UploadConfigError) {
+      return c.json(
+        {
+          message: 'S3 upload config is incomplete',
+          error: `Missing ${error.missingFields.join(', ')}`,
+        },
+        500
+      );
+    }
+
     return c.json(
       {
         message: 'Failed to get S3 STS token',

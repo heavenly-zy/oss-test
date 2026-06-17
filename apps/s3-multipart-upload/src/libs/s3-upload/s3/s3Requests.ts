@@ -17,7 +17,9 @@ import { stripEndpointPrefix } from '../core/objectKey';
 import type {
   RunMultipartOptions,
   S3MultipartUploadConfig,
+  S3StsSession,
   S3StsToken,
+  S3UploadTargetConfig,
   StoredPart,
 } from '../core/types';
 
@@ -38,14 +40,13 @@ async function toByteBody(blob: Blob): Promise<Uint8Array> {
 }
 
 /**
- * 从后端获取三字段 STS 临时凭证。
+ * 从后端获取 STS 上传会话。
  *
- * 后端接口只负责签发 `securityToken`、`accessKeyId`、`accessKeySecret`，
- * Bucket、Region、Endpoint 等上传目标统一由前端环境变量提供。
+ * 后端接口负责签发临时凭证，并返回 Bucket、Region、Endpoint 等上传目标。
  *
  * @param url 后端 STS 接口地址，默认是 `/api/s3-sts-token`。
  */
-export async function fetchS3StsToken(url: string): Promise<S3StsToken> {
+export async function fetchS3StsSession(url: string): Promise<S3StsSession> {
   const response = await fetch(url);
   const text = await response.text();
 
@@ -53,12 +54,52 @@ export async function fetchS3StsToken(url: string): Promise<S3StsToken> {
     throw new Error(`获取 STS 临时凭证失败，HTTP ${response.status}：${text || response.statusText}`);
   }
 
-  const token = JSON.parse(text) as Partial<S3StsToken>;
-  if (!token.securityToken || !token.accessKeyId || !token.accessKeySecret) {
-    throw new Error('STS 接口必须返回 securityToken、accessKeyId、accessKeySecret。');
+  const session = JSON.parse(text) as Partial<S3StsSession>;
+  const credentials = session.credentials;
+  const upload = session.upload;
+
+  if (!credentials?.securityToken || !credentials.accessKeyId || !credentials.accessKeySecret) {
+    throw new Error('STS 接口必须返回 credentials.securityToken、credentials.accessKeyId、credentials.accessKeySecret。');
   }
 
-  return token as S3StsToken;
+  if (
+    !upload?.bucket ||
+    !upload.region ||
+    typeof upload.basePath !== 'string' ||
+    typeof upload.forcePathStyle !== 'boolean'
+  ) {
+    throw new Error('STS 接口必须返回 upload.bucket、upload.region、upload.basePath、upload.forcePathStyle。');
+  }
+
+  return {
+    credentials,
+    upload: normalizeUploadTargetConfig(upload),
+  };
+}
+
+/** 从后端获取三字段 STS 临时凭证。 */
+export async function fetchS3StsToken(url: string): Promise<S3StsToken> {
+  const session = await fetchS3StsSession(url);
+  return session.credentials;
+}
+
+/** 从 STS 接口读取上传目标配置，供页面初始化使用。 */
+export async function fetchS3UploadConfig(url: string): Promise<S3UploadTargetConfig> {
+  const session = await fetchS3StsSession(url);
+  return session.upload;
+}
+
+function normalizeUploadTargetConfig(
+  upload: Partial<S3UploadTargetConfig>
+): S3UploadTargetConfig {
+  return {
+    bucket: upload.bucket!,
+    region: upload.region!,
+    endpoint: upload.endpoint || undefined,
+    basePath: upload.basePath!,
+    publicBaseUrl: upload.publicBaseUrl || undefined,
+    forcePathStyle: upload.forcePathStyle!,
+  };
 }
 
 /**

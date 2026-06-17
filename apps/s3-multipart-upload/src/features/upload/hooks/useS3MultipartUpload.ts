@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  fetchS3UploadConfig,
   loadCompletedUpload,
   loadCheckpoint,
   readRuntimeConfig,
@@ -24,6 +25,25 @@ import { useUploadLogger } from './useUploadLogger';
 
 export type { UploadLogEntry, UploadStatus } from '../types';
 
+function isMissingMultipartUploadError(error: unknown): boolean {
+  const detail =
+    error && typeof error === 'object'
+      ? [
+          'name' in error ? String(error.name) : '',
+          'code' in error ? String(error.code) : '',
+          'Code' in error ? String(error.Code) : '',
+          error instanceof Error ? error.message : '',
+        ].join(' ')
+      : String(error);
+  const normalized = detail.toLowerCase();
+
+  return (
+    normalized.includes('nosuchupload') ||
+    normalized.includes('specified upload does not exist') ||
+    normalized.includes('upload id may be invalid')
+  );
+}
+
 /**
  * 页面级上传状态管理 Hook。
  *
@@ -31,7 +51,7 @@ export type { UploadLogEntry, UploadStatus } from '../types';
  * 续传、生成预签名读取 URL，以及维护日志和错误状态。
  */
 export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
-  const config = useMemo(readRuntimeConfig, []);
+  const [config, setConfig] = useState(readRuntimeConfig);
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [checkpoint, setCheckpoint] = useState<MultipartCheckpoint | null>(null);
@@ -45,6 +65,36 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
   const abortRequestedRef = useRef(false);
   const { logs, appendLog, clearLogs } = useUploadLogger();
   const { startSimpleProgress, stopSimpleProgress } = useSimpleUploadProgress(setProgress);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function loadUploadConfig() {
+      try {
+        const uploadConfig = await fetchS3UploadConfig(config.stsTokenUrl);
+        if (disposed) return;
+
+        setConfig((current) => ({
+          ...current,
+          ...uploadConfig,
+          missingKeys: [],
+        }));
+        appendLog('info', '已加载服务端上传配置。');
+      } catch (error) {
+        if (disposed) return;
+
+        const message = `加载上传配置失败：${toReadableError(error)}`;
+        setErrorMessage(message);
+        appendLog('error', message);
+      }
+    }
+
+    void loadUploadConfig();
+
+    return () => {
+      disposed = true;
+    };
+  }, [appendLog, config.stsTokenUrl]);
 
   /** 接收上传类派发的进度事件，并同步到页面状态。 */
   const handleProgress = useCallback((event: UploadProgressEvent) => {
@@ -63,7 +113,7 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
   /** 获取或创建当前上传任务使用的 S3MultipartUpload 实例。 */
   const getUploader = useCallback(() => {
     if (config.missingKeys.length > 0) {
-      throw new Error(`缺少前端环境变量：${config.missingKeys.join(', ')}`);
+      throw new Error(`上传配置未就绪：${config.missingKeys.join(', ')}`);
     }
 
     if (!uploaderRef.current) {
@@ -227,6 +277,13 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
         return;
       }
 
+      if (config.missingKeys.length > 0) {
+        const message = `上传配置未就绪：${config.missingKeys.join(', ')}`;
+        setErrorMessage(message);
+        appendLog('error', message);
+        return;
+      }
+
       prepareUploadRun(file, mode);
 
       try {
@@ -245,10 +302,26 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
         if (!shouldResume && isSimpleUpload) startSimpleProgress(file);
 
         appendLog('info', shouldResume ? '开始断点续传。' : '开始新上传。');
-        const uploadResult =
-          shouldResume
-            ? await uploader.resumeMultipartUpload(file, checkpoint)
-            : await uploader.upload(file);
+        let uploadResult: UploadResult;
+
+        if (shouldResume) {
+          try {
+            uploadResult = await uploader.resumeMultipartUpload(file, checkpoint);
+          } catch (error) {
+            if (!isMissingMultipartUploadError(error)) throw error;
+
+            removeCheckpoint(file);
+            setCheckpoint(null);
+            disposeUploader();
+            appendLog('info', '本地断点对应的远端分片任务已失效，已清除断点并重新上传。');
+
+            const freshUploader = getUploader();
+            if (!freshUploader.shouldUseMultipart(file)) startSimpleProgress(file);
+            uploadResult = await freshUploader.upload(file);
+          }
+        } else {
+          uploadResult = await uploader.upload(file);
+        }
 
         stopSimpleProgress();
         removeCheckpoint(file);
@@ -268,6 +341,7 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
     [
       appendLog,
       checkpoint,
+      config,
       disposeUploader,
       getUploader,
       handleUploadError,

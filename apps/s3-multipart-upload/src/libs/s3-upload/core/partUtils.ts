@@ -8,8 +8,8 @@ import type { MultipartCheckpoint, S3MultipartUploadConfig, StoredPart } from '.
  * @param config 前端运行时上传配置。
  */
 export function validateUploadConfig(config: S3MultipartUploadConfig): void {
-  if (!config.bucket) throw new Error('缺少 VITE_S3_BUCKET。');
-  if (!config.region) throw new Error('缺少 VITE_S3_REGION。');
+  if (!config.bucket) throw new Error('缺少 bucket。');
+  if (!config.region) throw new Error('缺少 region。');
   if (config.partSize < MIN_PART_SIZE) {
     throw new Error('S3 分片大小必须至少为 5 MiB。');
   }

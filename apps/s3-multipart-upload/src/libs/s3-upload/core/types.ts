@@ -19,22 +19,34 @@ export interface S3StsToken {
   accessKeySecret: string;
 }
 
-/** 前端运行时上传配置；endpoint 只允许来自前端环境变量，不由 STS 接口返回。 */
-export interface S3MultipartUploadConfig {
+/** 后端下发的上传目标配置。 */
+export interface S3UploadTargetConfig {
   /** S3/OSS Bucket 名称。 */
   bucket: string;
   /** S3/OSS Region。 */
   region: string;
-  /** 开发环境 OSS S3-compatible endpoint；生产 AWS S3 可留空。 */
+  /** 开发环境 OSS S3-compatible endpoint；生产 AWS S3 可为空。 */
   endpoint?: string;
   /** 对象 Key 的统一前缀。 */
   basePath: string;
-  /** 获取三字段 STS 临时凭证的后端接口地址。 */
-  stsTokenUrl: string;
   /** 公开读域名或 CDN 域名；没有时上传完成后可生成预签名读取地址。 */
   publicBaseUrl?: string;
   /** 是否强制 path-style 地址，MinIO 等本地 S3 服务常需要开启。 */
   forcePathStyle: boolean;
+}
+
+/** 后端 STS 接口返回的上传会话。 */
+export interface S3StsSession {
+  /** 临时上传凭证。 */
+  credentials: S3StsToken;
+  /** 本次上传使用的目标配置。 */
+  upload: S3UploadTargetConfig;
+}
+
+/** 前端运行时上传配置。 */
+export interface S3MultipartUploadConfig extends S3UploadTargetConfig {
+  /** 获取 STS 临时凭证和上传配置的后端接口地址。 */
+  stsTokenUrl: string;
   /** 超过该字节数时启用分片上传。 */
   multipartThreshold: number;
   /** 单个分片大小，单位字节。 */

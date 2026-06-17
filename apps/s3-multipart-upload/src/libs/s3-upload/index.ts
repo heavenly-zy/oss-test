@@ -16,6 +16,7 @@ export {
   readString,
 } from './adapters/vite-env/envReaders';
 export { readRuntimeConfig } from './adapters/vite-env/runtimeConfig';
+export { fetchS3UploadConfig } from './s3/s3Requests';
 export type { RuntimeConfig } from './adapters/vite-env/runtimeConfig';
 export { S3MultipartUpload, S3_UPLOAD_EVENTS } from './core/S3MultipartUpload';
 export type {
@@ -23,7 +24,9 @@ export type {
   MultipartCheckpoint,
   RunMultipartOptions,
   S3MultipartUploadConfig,
+  S3StsSession,
   S3StsToken,
+  S3UploadTargetConfig,
   StoredPart,
   UploadEventName,
   UploadIdEvent,

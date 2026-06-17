@@ -5,9 +5,9 @@
 ## 设计取舍
 
 - 开发环境使用 OSS S3-compatible endpoint 模拟 S3。
-- 生产环境继续使用 AWS SDK v3；`VITE_S3_ENDPOINT` 留空时走 AWS S3 默认 endpoint。
-- `/api/s3-sts-token` 只返回 `securityToken`、`accessKeyId`、`accessKeySecret` 三个字段。
-- `bucket`、`region`、`basePath`、`endpoint`、分片大小和并发数均由前端环境变量控制。
+- `/api/s3-sts-token` 返回临时凭证和上传目标配置。
+- `bucket`、`region`、`basePath`、`endpoint`、`publicBaseUrl`、`forcePathStyle` 由后端下发。
+- 分片大小、阈值、并发数和预签名读取 URL 有效期仍由前端环境变量控制。
 - 断点续传不使用 `@aws-sdk/lib-storage Upload`，因为它没有公开可持久化 checkpoint/resume API；这里的 checkpoint 只保存 `UploadId`、`Key`、`partSize` 和文件标识，恢复时通过 `ListParts` 查询远端真实分片状态。
 
 ## 关键能力
@@ -56,18 +56,14 @@ flowchart TD
 
 ## 环境变量
 
-本子包已提供实际读取的 `.env` 文件，同时保留 `.env.example` 作为提交到仓库的示例模板。至少需要配置：
+本子包已提供当前模式实际读取的 `.env` 文件。上传目标配置由后端 `/api/s3-sts-token` 下发，前端只保留接口地址和上传行为参数：
 
 ```bash
-VITE_S3_BUCKET=your-bucket
-VITE_S3_REGION=oss-cn-hangzhou
-VITE_S3_ENDPOINT=https://s3.oss-cn-hangzhou.aliyuncs.com
-```
-
-生产 AWS S3 可以把 `VITE_S3_ENDPOINT` 留空：
-
-```bash
-VITE_S3_ENDPOINT=
+VITE_S3_STS_TOKEN_URL=/api/s3-sts-token
+VITE_S3_PART_SIZE_MB=5
+VITE_S3_MULTIPART_THRESHOLD_MB=10
+VITE_S3_CONCURRENCY=10
+VITE_S3_SIGN_URL_EXPIRE_SECONDS=518400
 ```
 
 ## 后端接口
@@ -78,17 +74,27 @@ VITE_S3_ENDPOINT=
 GET /api/s3-sts-token
 ```
 
-成功响应只包含三个字段：
+成功响应包含临时凭证和上传配置：
 
 ```json
 {
-  "securityToken": "...",
-  "accessKeyId": "...",
-  "accessKeySecret": "..."
+  "credentials": {
+    "securityToken": "...",
+    "accessKeyId": "...",
+    "accessKeySecret": "..."
+  },
+  "upload": {
+    "bucket": "...",
+    "region": "...",
+    "endpoint": "...",
+    "basePath": "uploads/",
+    "publicBaseUrl": null,
+    "forcePathStyle": false
+  }
 }
 ```
 
-该接口已在 `apps/api` 中新增，沿用现有 `OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`ROLE_ARN` 环境变量。
+该接口已在 `apps/api` 中新增，沿用现有 `OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`ROLE_ARN`、`OSS_BUCKET`、`OSS_REGION` 环境变量；可选上传配置使用 `S3_ENDPOINT`、`S3_BASE_PATH`、`S3_PUBLIC_BASE_URL`、`S3_FORCE_PATH_STYLE`。
 
 ## 启动
 
