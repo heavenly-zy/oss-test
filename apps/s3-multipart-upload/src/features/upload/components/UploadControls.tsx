@@ -8,7 +8,7 @@ interface UploadControlsProps {
   hasResult: boolean;
   configReady: boolean;
   onStart: () => Promise<void>;
-  onResume: () => Promise<void>;
+  onForceNew: () => Promise<void>;
   onPause: () => Promise<void>;
   onAbort: () => Promise<void>;
   onSign: () => Promise<void>;
@@ -22,7 +22,7 @@ export function UploadControls({
   hasResult,
   configReady,
   onStart,
-  onResume,
+  onForceNew,
   onPause,
   onAbort,
   onSign,
@@ -37,8 +37,8 @@ export function UploadControls({
         <ActionButton disabled={disabledBase} tone="primary" onClick={onStart}>
           上传
         </ActionButton>
-        <ActionButton disabled={disabledBase || !hasCheckpoint} tone="neutral" onClick={onResume}>
-          断点续传
+        <ActionButton disabled={disabledBase} tone="neutral" onClick={onForceNew}>
+          重新上传
         </ActionButton>
         <ActionButton disabled={!busy} tone="warning" onClick={onPause}>
           暂停

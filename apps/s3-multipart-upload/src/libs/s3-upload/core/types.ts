@@ -1,7 +1,7 @@
 import type { S3_UPLOAD_EVENTS } from './constants';
 
-/** 上传模式：普通上传、首次分片上传、基于断点的续传。 */
-export type UploadMode = 'simple' | 'multipart' | 'resume';
+/** 上传模式：普通上传、首次分片上传、基于断点的续传、本地完成记录复用。 */
+export type UploadMode = 'simple' | 'multipart' | 'resume' | 'local';
 
 /** 上传阶段，用于 UI 展示当前处于准备、上传、合成还是完成。 */
 export type UploadPhase = 'preparing' | 'uploading' | 'completing' | 'done';
@@ -87,10 +87,6 @@ export interface StoredPart {
 export interface MultipartCheckpoint {
   /** 断点结构版本，后续字段变化时可用于兼容迁移。 */
   version: 1;
-  /** 断点所属 Bucket。 */
-  bucket: string;
-  /** 断点所属 Region。 */
-  region: string;
   /** 断点对应的对象 Key。 */
   key: string;
   /** 断点续传依赖的 multipart UploadId。 */
@@ -104,10 +100,37 @@ export interface MultipartCheckpoint {
     lastModified: number;
     type: string;
   };
-  /** 本地已知的完成分片；恢复时还会通过 ListParts 与远端状态合并。 */
-  parts: StoredPart[];
   /** 断点最近更新时间，毫秒时间戳。 */
   updatedAt: number;
+}
+
+/** 持久化在 localStorage 中的已完成上传记录，用于同浏览器本地复用。 */
+export interface CompletedUploadRecord {
+  /** 完成记录结构版本，后续字段变化时可用于兼容迁移。 */
+  version: 1;
+  /** 完成对象所属 Bucket，用于判断记录是否仍匹配当前配置。 */
+  bucket: string;
+  /** 完成对象所属 Region，用于判断记录是否仍匹配当前配置。 */
+  region: string;
+  /** 已完成对象 Key。 */
+  key: string;
+  /** 原始上传模式。 */
+  mode: UploadMode;
+  /** 已完成对象 ETag。 */
+  eTag?: string;
+  /** 对象存储返回的 Location。 */
+  location?: string;
+  /** 基于 publicBaseUrl 拼出的公开访问地址。 */
+  publicUrl?: string;
+  /** 原始文件元信息，用于判断本地记录是否属于当前文件。 */
+  file: {
+    name: string;
+    size: number;
+    lastModified: number;
+    type: string;
+  };
+  /** 上传完成时间，毫秒时间戳。 */
+  completedAt: number;
 }
 
 /** 上传完成后的标准结果，供 UI 展示对象地址、ETag 和耗时。 */

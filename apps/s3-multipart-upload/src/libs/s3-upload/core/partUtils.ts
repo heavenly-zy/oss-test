@@ -39,11 +39,7 @@ export function calculateTotalParts(fileSize: number, partSize: number): number 
   return Math.ceil(fileSize / partSize);
 }
 
-/**
- * 将 ListParts 返回的 Part 结构转换为本地断点结构。
- *
- * @param parts 远端 ListParts 返回的分片列表。
- */
+/** 将 ListParts 返回的 Part 结构转换为运行时已完成分片结构。 */
 export function normalizeRemoteParts(parts: Part[]): StoredPart[] {
   return parts.flatMap((part) => {
     if (!part.ETag || !part.PartNumber) return [];
@@ -55,23 +51,6 @@ export function normalizeRemoteParts(parts: Part[]): StoredPart[] {
       },
     ];
   });
-}
-
-/**
- * 合并多个已完成分片列表。
- *
- * 相同 PartNumber 以后传入的分片为准，用于远端 ListParts 状态覆盖本地旧状态。
- *
- * @param partGroups 多组已完成分片。
- */
-export function mergeStoredParts(...partGroups: StoredPart[][]): Map<number, StoredPart> {
-  const partMap = new Map<number, StoredPart>();
-
-  for (const part of partGroups.flat()) {
-    partMap.set(part.PartNumber, part);
-  }
-
-  return partMap;
 }
 
 /**

@@ -13,7 +13,6 @@ export function CheckpointPanel({ checkpoint }: CheckpointPanelProps) {
         <dl className="mt-4 space-y-3 text-sm">
           <Row label="UploadId" value={checkpoint.uploadId} />
           <Row label="对象 Key" value={checkpoint.key} />
-          <Row label="已完成分片" value={String(checkpoint.parts.length)} />
           <Row label="分片大小" value={formatBytes(checkpoint.partSize)} />
           <Row label="更新时间" value={formatTime(checkpoint.updatedAt)} />
         </dl>

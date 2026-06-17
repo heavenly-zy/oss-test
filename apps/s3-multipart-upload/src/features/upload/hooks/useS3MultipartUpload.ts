@@ -1,13 +1,22 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  loadCompletedUpload,
   loadCheckpoint,
   readRuntimeConfig,
+  removeCompletedUpload,
   removeCheckpoint,
   S3MultipartUpload,
   S3_UPLOAD_EVENTS,
+  saveCompletedUpload,
   saveCheckpoint,
 } from '@/libs/s3-upload';
-import type { MultipartCheckpoint, UploadIdEvent, UploadProgressEvent, UploadResult } from '@/libs/s3-upload';
+import type {
+  CompletedUploadRecord,
+  MultipartCheckpoint,
+  UploadIdEvent,
+  UploadProgressEvent,
+  UploadResult,
+} from '@/libs/s3-upload';
 import { toReadableError } from '../utils/format';
 import { INITIAL_PROGRESS, type UploadStatus, type UseS3MultipartUploadReturn } from '../types';
 import { useSimpleUploadProgress } from './useSimpleUploadProgress';
@@ -79,7 +88,7 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
   }, []);
 
   /** 开始上传前重置运行时状态。 */
-  const prepareUploadRun = useCallback((file: File, mode: 'new' | 'resume') => {
+  const prepareUploadRun = useCallback((file: File, mode: 'auto' | 'force-new') => {
     pauseRequestedRef.current = false;
     abortRequestedRef.current = false;
     activeFileRef.current = file;
@@ -87,7 +96,7 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
     setResult(null);
     setErrorMessage(null);
 
-    if (mode === 'new') {
+    if (mode === 'force-new') {
       removeCheckpoint(file);
       setCheckpoint(null);
     }
@@ -95,7 +104,7 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
 
   /** 统一处理上传异常，并区分暂停、终止和真实错误。 */
   const handleUploadError = useCallback(
-    (error: unknown, file: File) => {
+    (error: unknown) => {
       stopSimpleProgress();
 
       if (pauseRequestedRef.current) {
@@ -105,10 +114,6 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
       }
 
       if (abortRequestedRef.current) {
-        removeCheckpoint(file);
-        setCheckpoint(null);
-        setStatus('cancelled');
-        appendLog('info', '分片上传已终止。');
         return;
       }
 
@@ -118,6 +123,67 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
       appendLog('error', message);
     },
     [appendLog, stopSimpleProgress]
+  );
+
+  /** 尝试复用同浏览器本地完成记录，成功时直接写入上传结果。 */
+  const tryUseCompletedUpload = useCallback(
+    async (file: File, record: CompletedUploadRecord): Promise<boolean> => {
+      if (record.bucket !== config.bucket || record.region !== config.region) {
+        removeCompletedUpload(file);
+        appendLog('info', '本地完成记录与当前 Bucket/Region 不一致，已忽略。');
+        return false;
+      }
+
+      if (config.missingKeys.length > 0) return false;
+
+      const startedAt = performance.now();
+      const verifier = new S3MultipartUpload(config);
+      appendLog('info', `检测到本地完成记录，正在校验远端对象：${record.key}`);
+
+      try {
+        const objectInfo = await verifier.getCompletedObjectInfo(record.key);
+
+        if (objectInfo.size !== file.size) {
+          removeCompletedUpload(file);
+          appendLog('info', '本地完成记录已失效，远端对象大小与当前文件不一致。');
+          return false;
+        }
+
+        const uploadResult: UploadResult = {
+          mode: 'local',
+          bucket: record.bucket,
+          region: record.region,
+          key: record.key,
+          eTag: objectInfo.eTag ?? record.eTag,
+          location: record.location,
+          publicUrl: record.publicUrl,
+          durationMs: Math.round(performance.now() - startedAt),
+        };
+
+        removeCheckpoint(file);
+        setCheckpoint(null);
+        setResult(uploadResult);
+        setStatus('success');
+        setErrorMessage(null);
+        setProgress({
+          phase: 'done',
+          mode: 'local',
+          key: record.key,
+          percent: 100,
+          uploadedBytes: file.size,
+          totalBytes: file.size,
+        });
+        appendLog('success', `命中本地完成记录：${record.key}`);
+        return true;
+      } catch (error) {
+        removeCompletedUpload(file);
+        appendLog('info', `本地完成记录校验失败，已改为正常上传：${toReadableError(error)}`);
+        return false;
+      } finally {
+        verifier.destroy();
+      }
+    },
+    [appendLog, config]
   );
 
   /** 选择文件，并尝试加载该文件对应的本地断点。 */
@@ -143,13 +209,18 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
       if (savedCheckpoint) {
         appendLog('info', `检测到本地断点：${savedCheckpoint.uploadId}`);
       }
+
+      const completedRecord = loadCompletedUpload(file);
+      if (completedRecord) {
+        appendLog('info', `检测到本地完成记录，点击上传时会先校验：${completedRecord.key}`);
+      }
     },
     [appendLog, clearLogs]
   );
 
-  /** 执行上传主流程，可选择重新上传或基于 checkpoint 续传。 */
+  /** 执行上传主流程：本地复用、断点续传、新上传按顺序自动选择。 */
   const runUpload = useCallback(
-    async (mode: 'new' | 'resume') => {
+    async (mode: 'auto' | 'force-new') => {
       const file = selectedFile;
       if (!file) {
         setErrorMessage('请先选择文件。');
@@ -158,25 +229,36 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
 
       prepareUploadRun(file, mode);
 
-      const uploader = getUploader();
-      const isSimpleUpload = !uploader.shouldUseMultipart(file);
-      if (isSimpleUpload) startSimpleProgress(file);
-
       try {
-        appendLog('info', mode === 'resume' ? '开始断点续传。' : '开始上传。');
+        appendLog('info', mode === 'force-new' ? '忽略本地记录，开始重新上传。' : '开始上传。');
+
+        if (mode === 'auto') {
+          const completedRecord = loadCompletedUpload(file);
+          if (completedRecord && await tryUseCompletedUpload(file, completedRecord)) {
+            return;
+          }
+        }
+
+        const uploader = getUploader();
+        const shouldResume = mode === 'auto' && checkpoint;
+        const isSimpleUpload = !uploader.shouldUseMultipart(file);
+        if (!shouldResume && isSimpleUpload) startSimpleProgress(file);
+
+        appendLog('info', shouldResume ? '开始断点续传。' : '开始新上传。');
         const uploadResult =
-          mode === 'resume' && checkpoint
+          shouldResume
             ? await uploader.resumeMultipartUpload(file, checkpoint)
             : await uploader.upload(file);
 
         stopSimpleProgress();
         removeCheckpoint(file);
+        saveCompletedUpload(file, uploadResult);
         setCheckpoint(null);
         setResult(uploadResult);
         setStatus('success');
         appendLog('success', `上传完成：${uploadResult.key}`);
       } catch (error) {
-        handleUploadError(error, file);
+        handleUploadError(error);
       } finally {
         pauseRequestedRef.current = false;
         abortRequestedRef.current = false;
@@ -193,23 +275,19 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
       selectedFile,
       startSimpleProgress,
       stopSimpleProgress,
+      tryUseCompletedUpload,
     ]
   );
 
-  /** 忽略旧断点，重新开始上传。 */
-  const startNewUpload = useCallback(async () => {
-    await runUpload('new');
+  /** 自动选择本地复用、断点续传或新上传。 */
+  const startUpload = useCallback(async () => {
+    await runUpload('auto');
   }, [runUpload]);
 
-  /** 使用当前文件命中的 checkpoint 继续上传。 */
-  const resumeUpload = useCallback(async () => {
-    if (!checkpoint) {
-      setErrorMessage('当前文件没有可用断点。');
-      return;
-    }
-
-    await runUpload('resume');
-  }, [checkpoint, runUpload]);
+  /** 忽略本地记录和断点，重新开始上传。 */
+  const forceNewUpload = useCallback(async () => {
+    await runUpload('force-new');
+  }, [runUpload]);
 
   /** 暂停当前上传，但保留远端分片和本地断点。 */
   const pauseUpload = useCallback(async () => {
@@ -226,18 +304,25 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
     try {
       if (activeUploader) {
         await activeUploader.abortActiveMultipartUpload();
-        return;
-      }
-
-      if (checkpoint) {
+      } else if (checkpoint) {
         const uploader = getUploader();
         await uploader.abortMultipartUpload(checkpoint.uploadId, checkpoint.key);
-        appendLog('info', `已终止远端分片任务：${checkpoint.uploadId}`);
       }
-    } finally {
+
       if (file) removeCheckpoint(file);
       setCheckpoint(null);
       setStatus('cancelled');
+      setErrorMessage(null);
+      appendLog('info', checkpoint ? `已终止远端分片任务：${checkpoint.uploadId}` : '分片上传已终止。');
+    } catch (error) {
+      const message = `终止分片失败：${toReadableError(error)}`;
+      setStatus('error');
+      setErrorMessage(message);
+      appendLog('error', message);
+    } finally {
+      if (!activeUploader) {
+        abortRequestedRef.current = false;
+      }
       disposeUploader();
     }
   }, [appendLog, checkpoint, disposeUploader, getUploader, selectedFile]);
@@ -284,8 +369,8 @@ export function useS3MultipartUpload(): UseS3MultipartUploadReturn {
     logs,
     errorMessage,
     selectFile,
-    startNewUpload,
-    resumeUpload,
+    startUpload,
+    forceNewUpload,
     pauseUpload,
     abortMultipartUpload,
     createSignedUrl,

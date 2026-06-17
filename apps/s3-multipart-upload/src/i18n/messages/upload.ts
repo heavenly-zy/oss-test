@@ -22,6 +22,7 @@ export const MODE_LABELS: Record<UploadMode, string> = {
   simple: '普通上传',
   multipart: '分片上传',
   resume: '断点续传',
+  local: '本地秒传',
 };
 
 export const LOG_LEVEL_LABELS: Record<UploadLogEntry['level'], string> = {

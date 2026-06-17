@@ -39,10 +39,10 @@ export interface UseS3MultipartUploadReturn {
   errorMessage: string | null;
   /** 选择或清空文件。 */
   selectFile: (file: File | null) => void;
-  /** 忽略旧断点，重新创建上传任务。 */
-  startNewUpload: () => Promise<void>;
-  /** 使用当前 checkpoint 继续上传。 */
-  resumeUpload: () => Promise<void>;
+  /** 自动选择本地复用、断点续传或新上传。 */
+  startUpload: () => Promise<void>;
+  /** 忽略本地记录和断点，重新创建上传任务。 */
+  forceNewUpload: () => Promise<void>;
   /** 暂停当前上传并保留远端分片。 */
   pauseUpload: () => Promise<void>;
   /** 终止远端 multipart 任务并清理本地断点。 */

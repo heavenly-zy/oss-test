@@ -6,7 +6,6 @@ import { createObjectKey, createPublicUrl } from './objectKey';
 import {
   assertCheckpointMatchesFile,
   calculateTotalParts,
-  mergeStoredParts,
   normalizePartSize,
   normalizeRemoteParts,
   sortParts,
@@ -21,6 +20,7 @@ import {
   createPresignedReadUrl,
   createS3Client,
   fetchS3StsToken,
+  headObject,
   listUploadedParts,
   putObject,
   uploadPart,
@@ -165,8 +165,7 @@ export class S3MultipartUpload extends EventEmitter {
   /**
    * 基于本地断点继续 multipart 上传。
    *
-   * 恢复前会调用 ListParts 查询远端已完成分片，再与本地 checkpoint 合并，
-   * 避免浏览器中断时 localStorage 没来得及记录最新分片。
+   * 恢复前会调用 ListParts 查询远端已完成分片，并只以远端状态作为续传依据。
    *
    * @param file 重新选择的原始文件，必须与 checkpoint 中的文件信息匹配。
    * @param checkpoint localStorage 中保存的断点信息。
@@ -176,7 +175,7 @@ export class S3MultipartUpload extends EventEmitter {
 
     const client = await this.getInstance();
     const remoteParts = await listUploadedParts(client, this.config, checkpoint.uploadId, checkpoint.key);
-    const partMap = mergeStoredParts(checkpoint.parts, normalizeRemoteParts(remoteParts));
+    const knownParts = normalizeRemoteParts(remoteParts);
 
     this.activeMultipart = {
       key: checkpoint.key,
@@ -190,7 +189,7 @@ export class S3MultipartUpload extends EventEmitter {
       key: checkpoint.key,
       uploadId: checkpoint.uploadId,
       partSize: checkpoint.partSize,
-      knownParts: Array.from(partMap.values()),
+      knownParts,
     });
   }
 
@@ -244,25 +243,37 @@ export class S3MultipartUpload extends EventEmitter {
   }
 
   /**
+   * 查询已完成对象的基础信息。
+   *
+   * 用于本地完成记录复用前校验对象是否仍存在，以及远端大小是否匹配当前文件。
+   *
+   * @param key 已完成对象的 Key。
+   */
+  async getCompletedObjectInfo(key: string): Promise<{ eTag?: string; size?: number }> {
+    const result = await headObject(await this.getInstance(), this.config, key);
+
+    return {
+      eTag: result.ETag,
+      size: result.ContentLength,
+    };
+  }
+
+  /**
    * 创建可持久化断点对象。
    *
    * @param file 当前上传的原始文件。
    * @param uploadId multipart 上传任务 ID。
    * @param key 对象 Key。
    * @param partSize 本次任务固定分片大小。
-   * @param parts 已完成分片列表。
    */
   createCheckpoint(
     file: File,
     uploadId: string,
     key: string,
-    partSize: number,
-    parts: StoredPart[]
+    partSize: number
   ): MultipartCheckpoint {
     return {
       version: 1,
-      bucket: this.config.bucket,
-      region: this.config.region,
       key,
       uploadId,
       partSize,
@@ -272,7 +283,6 @@ export class S3MultipartUpload extends EventEmitter {
         lastModified: file.lastModified,
         type: file.type || 'application/octet-stream',
       },
-      parts: sortParts(parts),
       updatedAt: Date.now(),
     };
   }
@@ -316,7 +326,9 @@ export class S3MultipartUpload extends EventEmitter {
   private async runMultipartUpload(options: RunMultipartOptions): Promise<UploadResult> {
     const startedAt = performance.now();
     const totalParts = calculateTotalParts(options.file.size, options.partSize);
-    const uploadedParts = mergeStoredParts(options.knownParts);
+    const uploadedParts = new Map<number, StoredPart>(
+      options.knownParts.map((part) => [part.PartNumber, part])
+    );
     const client = await this.getInstance();
     const abortController = this.createActiveAbortController();
     const limit = pLimit(this.config.concurrency);
@@ -324,7 +336,7 @@ export class S3MultipartUpload extends EventEmitter {
     let completedParts = uploadedParts.size;
 
     this.activeLimit = limit;
-    this.emitCheckpoint(options.file, options.uploadId, options.key, options.partSize, uploadedParts);
+    this.emitCheckpoint(options.file, options.uploadId, options.key, options.partSize);
     this.emitMultipartProgress(options, uploadedBytes, completedParts, totalParts, 'uploading');
 
     const tasks: Array<Promise<StoredPart>> = [];
@@ -339,7 +351,7 @@ export class S3MultipartUpload extends EventEmitter {
           uploadedParts.set(partNumber, storedPart);
           uploadedBytes += storedPart.Size;
           completedParts += 1;
-          this.emitCheckpoint(options.file, options.uploadId, options.key, options.partSize, uploadedParts);
+          this.emitCheckpoint(options.file, options.uploadId, options.key, options.partSize);
           this.emitMultipartProgress(options, uploadedBytes, completedParts, totalParts, 'uploading');
 
           return storedPart;
@@ -431,12 +443,11 @@ export class S3MultipartUpload extends EventEmitter {
     file: File,
     uploadId: string,
     key: string,
-    partSize: number,
-    parts: Map<number, StoredPart>
+    partSize: number
   ): void {
     this.emit(
       S3_UPLOAD_EVENTS.CHECKPOINT_UPDATE,
-      this.createCheckpoint(file, uploadId, key, partSize, Array.from(parts.values()))
+      this.createCheckpoint(file, uploadId, key, partSize)
     );
   }
 

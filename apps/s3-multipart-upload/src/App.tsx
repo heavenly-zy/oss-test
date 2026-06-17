@@ -45,8 +45,8 @@ function App() {
               hasCheckpoint={Boolean(upload.checkpoint)}
               hasResult={Boolean(upload.result)}
               configReady={configReady}
-              onStart={upload.startNewUpload}
-              onResume={upload.resumeUpload}
+              onStart={upload.startUpload}
+              onForceNew={upload.forceNewUpload}
               onPause={upload.pauseUpload}
               onAbort={upload.abortMultipartUpload}
               onSign={upload.createSignedUrl}

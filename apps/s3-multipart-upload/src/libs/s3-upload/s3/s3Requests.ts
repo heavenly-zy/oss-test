@@ -3,11 +3,13 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListPartsCommand,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
   type Part,
+  type HeadObjectCommandOutput,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SIGN_URL_MAX_EXPIRE_SECONDS } from '../core/constants';
@@ -281,6 +283,28 @@ export async function listUploadedParts(
   } while (marker !== undefined);
 
   return parts;
+}
+
+/**
+ * 查询已完成对象的元信息。
+ *
+ * 本地完成记录复用前用它校验对象是否仍存在，以及远端大小是否匹配当前文件。
+ *
+ * @param client 已初始化的 S3Client。
+ * @param config 前端 S3 运行时配置。
+ * @param key 已完成对象的 Key。
+ */
+export async function headObject(
+  client: S3Client,
+  config: S3MultipartUploadConfig,
+  key: string
+): Promise<HeadObjectCommandOutput> {
+  return client.send(
+    new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+    })
+  );
 }
 
 /**
