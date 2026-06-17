@@ -94,7 +94,100 @@ const result = await client.send(
 - 命中后，后端返回已有对象的 `key/publicUrl`，前端直接展示完成
 - 未命中时，再创建或恢复 multipart 上传会话
 
-如果只做前端 localStorage 秒传，也只能算“同浏览器本地缓存优化”：它不能跨设备，不能证明远端对象还存在，也不能作为业务可信结果。
+如果只做前端 localStorage 秒传，也只能算“同浏览器本地缓存优化”：它不能跨设备，不能作为业务可信结果；如果再配合 `HeadObjectCommand` 校验 `Key` 是否存在、对象大小是否匹配，可以避免“本地记录存在但远端对象已被删”的明显误判。
+
+### 秒传路线怎么选
+
+能不能不保存本地完成记录，取决于 `Key` 能不能从当前文件**稳定重新计算**出来。
+
+#### 路线 1：随机 Key + 本地完成记录
+
+当前 demo 使用的是：
+
+```text
+basePath/yyyy/mm/dd/randomUUID-safeFileName
+```
+
+因为 `Key` 里有随机 UUID，同一个文件下次重新选择时，前端无法反推出上次上传得到的 `Key`。这时如果要做同浏览器/同设备的本地秒传，就必须保存一个本地映射：
+
+```text
+fileName + fileSize + lastModified -> key
+```
+
+下次点击上传时：
+
+1. 先从 localStorage 读出上次完成对象的 `key`
+2. 再用 `HeadObjectCommand(Bucket + Key)` 校验对象还在
+3. 如果 `ContentLength === file.size`，就直接复用这个对象
+4. 如果对象不存在或大小不匹配，删除本地完成记录，继续走断点续传或新上传
+
+优点是不会因为同名文件互相覆盖，也能保留按日期排查对象的便利。缺点是只能同浏览器生效，换设备或清空 localStorage 后就找不到上次的随机 `Key`。
+
+#### 路线 2：确定性 Key + HeadObject
+
+如果把 `Key` 设计成确定性的，例如：
+
+```text
+basePath/safeFileName
+basePath/fileSize-lastModified-safeFileName
+basePath/hash-safeFileName
+```
+
+那么同一个文件下次选择时，前端可以重新算出同一个 `Key`，再直接用 `HeadObjectCommand` 查询对象是否存在。这样不一定需要 localStorage。
+
+但这个路线要承担 Key 冲突和覆盖问题：
+
+- 只用文件名会导致同名文件互相覆盖
+- `fileName + fileSize + lastModified` 不是内容级身份，仍可能误判
+- 用整文件 hash 更准确，但上传前要先读完整文件，启动会变慢
+- 没有用户隔离前缀时，不同用户可能命中同一个对象地址
+
+所以确定性 Key 更适合业务上明确需要“同内容共用同对象”的场景，通常还要引入 `userId`、业务目录或内容 hash。它只是让前端能重新算出 `Key`，不等于已经解决了“当前用户是否有权复用这个对象”的业务判断。
+
+#### 路线 3：业务后端索引
+
+如果要做可靠秒传，推荐由业务后端保存：
+
+```text
+userId + fileSize + fileHash -> completedObject
+```
+
+前端负责计算 hash 并请求后端；后端决定当前用户是否有权复用已有对象，并返回 `key/publicUrl`。这是跨浏览器、跨设备、可审计的方案。
+
+### 业界最佳实践
+
+真实业务里更常见的最佳实践是：**前端直传 S3，业务后端负责秒传判断和对象索引**。
+
+也就是：
+
+```text
+前端：选择文件、计算 hash、直传 S3
+S3：按 Key 存储和查询对象
+后端：保存 fileHash -> objectKey 的业务索引，并判断当前用户是否能复用
+```
+
+推荐流程：
+
+```text
+用户点击上传
+  -> 前端计算 fileSize + sha256
+  -> 请求业务后端 instant-check
+  -> 后端查询 userId + fileSize + sha256 是否已有 completed object
+  -> 命中：后端返回 key/publicUrl，前端直接展示成功
+  -> 未命中：后端创建 uploadSession 或返回上传凭证
+  -> 前端直传 S3
+  -> 上传完成后通知后端
+  -> 后端用 HeadObject 校验对象存在、大小和必要 metadata
+  -> 后端记录 fileHash -> objectKey
+```
+
+这个方案把三件事分清楚：
+
+- 前端负责用户本地文件读取、hash 计算和上传执行
+- S3 负责对象存储，不负责按内容查重
+- 业务后端负责“这个文件是否已存在、当前用户是否有权复用、复用哪个对象”
+
+当前 demo 的 `completedUploadStore + HeadObjectCommand` 属于同浏览器体验优化；它可以减少重复上传，但不是跨设备、可审计的业务秒传。真正上线时，建议把本地完成记录当作可选优化，把后端 `instant-check` 当作可信来源。
 
 ## 为什么要存 checkpoint
 
@@ -312,7 +405,7 @@ const result = await client.send(
 - 如果后续发现仅靠这些字段误命中概率不可接受，再考虑增加采样 hash，而不是一开始就算整文件 hash
 - 跨设备恢复前，必须重新选择本地文件；服务端只能保存远端任务状态，不能替你拿到用户设备上的文件内容
 - 应有定时清理机制：长时间未更新的会话标记为 `expired`，必要时调用 `AbortMultipartUploadCommand` 回收远端未完成分片
-- `CompleteMultipartUploadCommand` 需要提交完整的 `PartNumber + ETag` 列表，并按 `PartNumber` 升序排列；恢复时应先 `ListPartsCommand` 分页查询远端真实分片，再与本地 checkpoint 合并
+- `CompleteMultipartUploadCommand` 需要提交完整的 `PartNumber + ETag` 列表，并按 `PartNumber` 升序排列；恢复时应先 `ListPartsCommand` 分页查询远端真实分片，并以远端结果作为续传依据
 - 分片数量和分片大小要受 S3 multipart 限制约束：除最后一片外分片不能太小，总分片数也不能超过对象存储允许的上限
 - 如果同一文件标识下已经存在多个未完成会话，说明并发幂等没有兜住；应选择一个明确策略，例如返回最近更新的会话，并把其他会话标记为待清理，而不是随机返回
 - 前端直连 S3 时，STS 凭证权限边界就是安全边界；不要给浏览器长期 AK/SK，也不要给超过上传所需范围的 bucket 权限
@@ -323,3 +416,4 @@ const result = await client.send(
 - **`ListPartsCommand` 只能查询这个任务的远端进度，前提是你先保存好了它的 `UploadId` 和 `Key`。**
 - **hash 只能辅助识别内容，不能替代 multipart 任务 ID。**
 - **秒传不是查 S3 的 UploadId，而是查业务后端保存的已完成对象索引。**
+- **如果使用随机 Key，本地秒传必须保存 `fileId -> key`；如果使用确定性 Key，才能靠当前文件重新算出 Key 后直接 `HeadObject`。**
