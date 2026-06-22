@@ -99,6 +99,7 @@ async function getS3StsToken() {
       securityToken: result.credentials.SecurityToken,
       accessKeyId: result.credentials.AccessKeyId,
       accessKeySecret: result.credentials.AccessKeySecret,
+      expiresAt: result.credentials.Expiration,
     },
     upload: uploadConfig,
   };
@@ -149,13 +150,15 @@ function createS3MultipartUploadPolicy(config: S3UploadConfig) {
     Statement: [
       {
         Effect: 'Allow',
+        Action: ['oss:ListMultipartUploads'],
+        Resource: `acs:oss:*:*:${config.bucket}`,
+      },
+      {
+        Effect: 'Allow',
         Action: [
           'oss:PutObject',
           'oss:PutObjectACL',
-          'oss:InitiateMultipartUpload',
-          'oss:UploadPart',
           'oss:ListParts',
-          'oss:CompleteMultipartUpload',
           'oss:AbortMultipartUpload',
           'oss:GetObject',
         ],
@@ -202,6 +205,7 @@ function createMultipartUploadPolicy() {
           'oss:CompleteMultipartUpload',
           'oss:AbortMultipartUpload',
           'oss:GetObject',
+          "oss:ListMultipartUploads"
         ],
         Resource: 'acs:oss:*:*:*',
       },
