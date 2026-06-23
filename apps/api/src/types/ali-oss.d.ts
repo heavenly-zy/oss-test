@@ -25,6 +25,13 @@ declare module 'ali-oss' {
     credentials: Credentials;
   }
 
+  export interface ObjectMetaResult {
+    status: number;
+    res: {
+      headers: Record<string, string | string[] | undefined>;
+    };
+  }
+
   export class STS {
     constructor(options: STSOptions);
     assumeRole(
@@ -39,6 +46,7 @@ declare module 'ali-oss' {
     static STS: typeof STS;
 
     constructor(options: OSSOptions);
+    getObjectMeta(name: string, options?: object): Promise<ObjectMetaResult>;
     signPostObjectPolicyV4(policy: object | string, date: Date): string;
   }
 }

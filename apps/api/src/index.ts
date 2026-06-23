@@ -79,6 +79,88 @@ class S3UploadConfigError extends Error {
   }
 }
 
+interface ApiResponse<T> {
+  code: number;
+  message: string;
+  data: T;
+}
+
+interface UploadIdentityInput {
+  algorithm: 'sha256';
+  hash: string;
+  size: number;
+  bucket: string;
+  region: string;
+  key: string;
+  name: string;
+  type: string;
+  lastModified: number;
+}
+
+interface UploadedVideoFrameReport {
+  bucket: string;
+  region: string;
+  key: string;
+  eTag?: string;
+}
+
+interface UploadedVideoFrameRecord extends UploadedVideoFrameReport {
+  publicUrl?: string;
+  url?: string;
+  urlKind?: 'public' | 'signed';
+}
+
+interface UploadMediaMetadataReport {
+  type: 'image' | 'video';
+  resolution: {
+    width: number;
+    height: number;
+  };
+  firstFrame?: UploadedVideoFrameReport;
+}
+
+interface UploadMediaMetadataRecord extends Omit<UploadMediaMetadataReport, 'firstFrame'> {
+  firstFrame?: UploadedVideoFrameRecord;
+}
+
+interface UploadCompletedReportInput extends UploadIdentityInput {
+  eTag?: string;
+  location?: string;
+  media?: UploadMediaMetadataReport;
+}
+
+interface UploadCompletedRecord {
+  bucket: string;
+  region: string;
+  key: string;
+  eTag?: string;
+  location?: string;
+  publicUrl?: string;
+  media?: UploadMediaMetadataRecord;
+}
+
+interface StoredUploadRecord extends UploadIdentityInput, UploadCompletedRecord {
+  status: 'available';
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ObjectMeta {
+  size: number;
+  eTag?: string;
+}
+
+class S3UploadRequestError extends Error {
+  constructor(
+    public readonly status: 400 | 403 | 404 | 409,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+const completedUploads = new Map<string, StoredUploadRecord>();
+
 // Return STS credentials with the upload target used by the S3 multipart demo.
 async function getS3StsToken() {
   const uploadConfig = getS3UploadConfig();
@@ -158,7 +240,10 @@ function createS3MultipartUploadPolicy(config: S3UploadConfig) {
         Action: [
           'oss:PutObject',
           'oss:PutObjectACL',
+          'oss:InitiateMultipartUpload',
+          'oss:UploadPart',
           'oss:ListParts',
+          'oss:CompleteMultipartUpload',
           'oss:AbortMultipartUpload',
           'oss:GetObject',
         ],
@@ -213,6 +298,287 @@ function createMultipartUploadPolicy() {
   };
 }
 
+function ok<T>(c: Context, data: T) {
+  return c.json({
+    code: 0,
+    message: 'ok',
+    data,
+  } satisfies ApiResponse<T>);
+}
+
+function requestFailed(c: Context, error: unknown) {
+  if (error instanceof S3UploadRequestError) {
+    return c.json(
+      {
+        code: error.status,
+        message: error.message,
+        data: null,
+      } satisfies ApiResponse<null>,
+      error.status
+    );
+  }
+
+  if (error instanceof S3UploadConfigError) {
+    return c.json(
+      {
+        code: 500,
+        message: `S3 upload config is incomplete: Missing ${error.missingFields.join(', ')}`,
+        data: null,
+      } satisfies ApiResponse<null>,
+      500
+    );
+  }
+
+  return c.json(
+    {
+      code: 500,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      data: null,
+    } satisfies ApiResponse<null>,
+    500
+  );
+}
+
+function normalizeLookupInput(value: unknown): UploadIdentityInput {
+  return readUploadIdentity(requirePlainObject(value));
+}
+
+function normalizeCompleteInput(value: unknown): UploadCompletedReportInput {
+  const input = requirePlainObject(value);
+  return {
+    ...readUploadIdentity(input),
+    eTag: readOptionalString(input, 'eTag'),
+    location: readOptionalString(input, 'location'),
+    media: readMedia(input.media),
+  };
+}
+
+function readUploadIdentity(input: Record<string, unknown>): UploadIdentityInput {
+  if (input.algorithm !== 'sha256') {
+    throw new S3UploadRequestError(400, 'algorithm must be sha256');
+  }
+
+  return {
+    algorithm: 'sha256',
+    hash: readRequiredString(input, 'hash'),
+    size: readSafeInteger(input, 'size', 0),
+    bucket: readRequiredString(input, 'bucket'),
+    region: readRequiredString(input, 'region'),
+    key: readRequiredString(input, 'key'),
+    name: readRequiredString(input, 'name'),
+    type: readString(input, 'type'),
+    lastModified: readSafeInteger(input, 'lastModified', 0),
+  };
+}
+
+function readMedia(value: unknown): UploadMediaMetadataReport | undefined {
+  if (value === undefined) return undefined;
+
+  const media = requirePlainObject(value);
+  const type = media.type;
+  if (type !== 'image' && type !== 'video') {
+    throw new S3UploadRequestError(400, 'media.type must be image or video');
+  }
+
+  const resolution = requirePlainObject(media.resolution);
+  return {
+    type,
+    resolution: {
+      width: readSafeInteger(resolution, 'width', 1),
+      height: readSafeInteger(resolution, 'height', 1),
+    },
+    firstFrame: readVideoFrame(media.firstFrame),
+  };
+}
+
+function readVideoFrame(value: unknown): UploadedVideoFrameReport | undefined {
+  if (value === undefined) return undefined;
+
+  const frame = requirePlainObject(value);
+  return {
+    bucket: readRequiredString(frame, 'bucket'),
+    region: readRequiredString(frame, 'region'),
+    key: readRequiredString(frame, 'key'),
+    eTag: readOptionalString(frame, 'eTag'),
+  };
+}
+
+function requirePlainObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new S3UploadRequestError(400, 'request body must be an object');
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readString(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  if (typeof value !== 'string') {
+    throw new S3UploadRequestError(400, `${key} must be a string`);
+  }
+
+  return value.trim();
+}
+
+function readRequiredString(input: Record<string, unknown>, key: string): string {
+  const value = readString(input, key);
+  if (!value) {
+    throw new S3UploadRequestError(400, `${key} cannot be empty`);
+  }
+
+  return value;
+}
+
+function readOptionalString(
+  input: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new S3UploadRequestError(400, `${key} must be a string`);
+  }
+
+  return value.trim() || undefined;
+}
+
+function readSafeInteger(
+  input: Record<string, unknown>,
+  key: string,
+  min: number
+): number {
+  const value = input[key];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min) {
+    throw new S3UploadRequestError(400, `${key} must be a safe integer >= ${min}`);
+  }
+
+  return value;
+}
+
+function recordKey(input: UploadIdentityInput): string {
+  return JSON.stringify([
+    input.algorithm,
+    input.hash,
+    input.size,
+    input.bucket,
+    input.region,
+    input.key,
+  ]);
+}
+
+function assertUploadTargetAllowed(target: {
+  bucket: string;
+  region: string;
+  key: string;
+}): S3UploadConfig {
+  const config = getS3UploadConfig();
+  if (!isUploadTargetAllowed(target, config)) {
+    throw new S3UploadRequestError(403, 'upload target is not allowed');
+  }
+
+  return config;
+}
+
+function isUploadTargetAllowed(
+  target: { bucket: string; region: string; key: string },
+  config: S3UploadConfig
+): boolean {
+  return (
+    target.bucket === config.bucket &&
+    target.region === config.region &&
+    target.key.startsWith(config.basePath)
+  );
+}
+
+async function getRemoteObjectMeta(
+  config: S3UploadConfig,
+  key: string
+): Promise<ObjectMeta> {
+  const client = new OSS({
+    region: config.region,
+    bucket: config.bucket,
+    accessKeyId: ACCESS_KEY_ID,
+    accessKeySecret: ACCESS_KEY_SECRET,
+  });
+
+  try {
+    const result = await client.getObjectMeta(key);
+    const size = Number(readHeader(result.res.headers, 'content-length'));
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error('Object storage did not return a valid content-length');
+    }
+
+    return {
+      size,
+      eTag: readHeader(result.res.headers, 'etag'),
+    };
+  } catch (error) {
+    if (isObjectNotFoundError(error)) {
+      throw new S3UploadRequestError(404, 'uploaded object does not exist');
+    }
+
+    throw error;
+  }
+}
+
+function readHeader(
+  headers: Record<string, string | string[] | undefined>,
+  key: string
+): string | undefined {
+  const value = headers[key] ?? headers[key.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function isObjectNotFoundError(error: unknown): boolean {
+  const maybeError = error as { status?: number; code?: string } | null;
+  return maybeError?.status === 404 || maybeError?.code === 'NoSuchKey';
+}
+
+function createPublicUrl(publicBaseUrl: string | null, key: string): string | undefined {
+  if (!publicBaseUrl) return undefined;
+  return `${publicBaseUrl}/${key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+async function toMediaRecord(
+  media: UploadMediaMetadataReport | undefined
+): Promise<UploadMediaMetadataRecord | undefined> {
+  if (!media) return undefined;
+  if (!media.firstFrame) return media;
+
+  const frameConfig = assertUploadTargetAllowed(media.firstFrame);
+  const frameObject = await getRemoteObjectMeta(frameConfig, media.firstFrame.key);
+  const publicUrl = createPublicUrl(frameConfig.publicBaseUrl, media.firstFrame.key);
+  const firstFrame: UploadedVideoFrameRecord = {
+    ...media.firstFrame,
+    eTag: media.firstFrame.eTag ?? frameObject.eTag,
+    ...(publicUrl
+      ? {
+          publicUrl,
+          url: publicUrl,
+          urlKind: 'public' as const,
+        }
+      : {}),
+  };
+
+  return {
+    type: media.type,
+    resolution: media.resolution,
+    firstFrame,
+  };
+}
+
+function toCompletedRecord(record: StoredUploadRecord): UploadCompletedRecord {
+  return {
+    bucket: record.bucket,
+    region: record.region,
+    key: record.key,
+    eTag: record.eTag,
+    location: record.location,
+    publicUrl: record.publicUrl,
+    media: record.media,
+  };
+}
+
 app.get('/api/oss-token', async (c: Context) => {
   try {
     const token = await getOSSToken();
@@ -258,6 +624,76 @@ app.get('/api/s3-sts-token', async (c: Context) => {
       },
       500
     );
+  }
+});
+
+app.post('/api/s3-upload-lookup', async (c: Context) => {
+  try {
+    const input = normalizeLookupInput(await c.req.json());
+    const config = getS3UploadConfig();
+
+    if (!isUploadTargetAllowed(input, config)) {
+      return ok(c, null);
+    }
+
+    const record = completedUploads.get(recordKey(input));
+    if (!record || record.status !== 'available') {
+      return ok(c, null);
+    }
+
+    let object: ObjectMeta;
+    try {
+      object = await getRemoteObjectMeta(config, record.key);
+    } catch (error) {
+      if (error instanceof S3UploadRequestError && error.status === 404) {
+        return ok(c, null);
+      }
+
+      throw error;
+    }
+
+    if (object.size !== record.size) {
+      return ok(c, null);
+    }
+
+    return ok(c, toCompletedRecord(record));
+  } catch (error) {
+    console.error('Lookup S3 upload failed:', error);
+    return requestFailed(c, error);
+  }
+});
+
+app.post('/api/s3-upload-complete', async (c: Context) => {
+  try {
+    const input = normalizeCompleteInput(await c.req.json());
+    const config = assertUploadTargetAllowed(input);
+    const object = await getRemoteObjectMeta(config, input.key);
+
+    if (object.size !== input.size) {
+      throw new S3UploadRequestError(409, 'uploaded object size mismatch');
+    }
+
+    const now = Date.now();
+    const key = recordKey(input);
+    const existing = completedUploads.get(key);
+    const media = await toMediaRecord(input.media);
+    const record: StoredUploadRecord = {
+      ...input,
+      eTag: input.eTag ?? object.eTag ?? existing?.eTag,
+      location: input.location ?? existing?.location,
+      publicUrl: createPublicUrl(config.publicBaseUrl, input.key),
+      media: media ?? existing?.media,
+      status: 'available',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    completedUploads.set(key, record);
+
+    return ok(c, toCompletedRecord(record));
+  } catch (error) {
+    console.error('Complete S3 upload failed:', error);
+    return requestFailed(c, error);
   }
 });
 
