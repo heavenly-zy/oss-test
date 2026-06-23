@@ -39,6 +39,27 @@ async function toByteBody(blob: Blob): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+function createContentDisposition(fileName: string): string {
+  const fallbackName = createAsciiFileName(fileName);
+  return `inline; filename="${fallbackName}"; filename*=UTF-8''${encodeRFC5987Value(fileName)}`;
+}
+
+function createAsciiFileName(fileName: string): string {
+  const name = fileName
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\x00-\x1f\x7f"\\]/g, '_')
+    .trim();
+
+  return name || 'download';
+}
+
+function encodeRFC5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
 /**
  * 从后端获取 STS 上传会话。
  *
@@ -145,6 +166,7 @@ export async function putObject(
       Key: key,
       Body: body,
       ContentType: file.type || 'application/octet-stream',
+      ContentDisposition: createContentDisposition(file.name),
       Metadata: {
         originalName: encodeURIComponent(file.name),
       },
@@ -174,6 +196,7 @@ export async function createMultipartTask(
       Bucket: config.bucket,
       Key: key,
       ContentType: file.type || 'application/octet-stream',
+      ContentDisposition: createContentDisposition(file.name),
       Metadata: {
         originalName: encodeURIComponent(file.name),
       },

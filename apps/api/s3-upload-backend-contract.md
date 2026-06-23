@@ -61,7 +61,7 @@ sequenceDiagram
   else 未命中或不可复用
     Backend-->>UploadLib: null
     UploadLib->>S3: PutObject 或 multipart upload
-    S3-->>UploadLib: ETag / Location
+    S3-->>UploadLib: ETag
     UploadLib->>Backend: POST /api/s3-upload-complete
     Backend->>S3: HeadObject(key)
     S3-->>Backend: ContentLength / ContentType / ETag / metadata
@@ -137,7 +137,6 @@ export interface UploadTargetConfig {
   region: string;
   endpoint?: string;
   basePath: string;
-  publicBaseUrl?: string;
   forcePathStyle: boolean;
 }
 
@@ -157,7 +156,7 @@ type UploadSessionApiResponse = ApiResponse<UploadSessionResponse>;
 
 - 临时凭证只允许访问当前业务允许的 `bucket` 和 `basePath`。
 - 如果允许前端调用 `ListMultipartUploads`，必须限制可列举的 prefix。
-- `publicBaseUrl` 只表示读取域名配置，不代表该对象已经被业务登记。
+- 上传会话只返回写入对象存储所需的目标配置；长期读取 URL 由 `/api/s3-upload-complete` 登记后生成。
 
 ### 5.3 `/api/s3-upload-lookup`
 
@@ -188,8 +187,6 @@ export interface UploadedVideoFrameRecord {
   key: string;
   eTag?: string;
   publicUrl?: string;
-  url?: string;
-  urlKind?: 'public' | 'signed';
 }
 
 export interface UploadMediaMetadataRecord {
@@ -206,7 +203,6 @@ export interface UploadCompletedRecord {
   region: string;
   key: string;
   eTag?: string;
-  location?: string;
   publicUrl?: string;
   media?: UploadMediaMetadataRecord;
 }
@@ -219,7 +215,7 @@ type UploadCompletedLookupApiResponse = ApiResponse<UploadCompletedRecord | null
 - 推荐以 `algorithm + hash + size + bucket + region + key` 查询业务上传记录。
 - 未命中、无权限、记录不可复用、对象已删除或记录状态不可用时，返回 `data: null`。
 - 命中后可按需再调用 `HeadObject` 验证对象仍存在，避免返回脏记录。
-- 返回的 `publicUrl` 应由后端根据自身可信的 `publicBaseUrl` 或 CDN 配置生成，不应盲信前端传入的 URL。
+- 返回的 `publicUrl` 应来自后端已保存的可信记录，由 `/api/s3-upload-complete` 根据后端 CDN / 公开读配置生成，不应盲信前端传入的 URL。
 
 ### 5.4 `/api/s3-upload-complete`
 
@@ -239,7 +235,6 @@ export interface UploadCompletedReportInput {
   type: string;
   lastModified: number;
   eTag?: string;
-  location?: string;
   media?: UploadMediaMetadataReport;
 }
 
@@ -273,7 +268,7 @@ type UploadCompletedReportApiResponse = ApiResponse<UploadCompletedRecord>;
 - `ETag` 可以保存，但不能把它当成全量文件 MD5。multipart upload、服务端加密或兼容存储实现都会让 ETag 语义变化。
 - 如果请求包含 `media.firstFrame`，后端也应对首帧对象调用 `HeadObject`，确认对象存在。
 - `media.resolution` 当前由前端从浏览器 File 读取，后端可以作为业务元数据保存；如果未来用于审核、计费或强校验，应由后端异步解析媒体文件后再确认。
-- 后端应保存稳定对象标识，而不是保存会过期的 `signedUrl`。推荐保存 `bucket`、`region`、`key`、`hash`、`size`、`type`、`media`、`status`、`ownerId`、`createdAt`、`updatedAt` 等字段。
+- 后端应生成并保存稳定对象标识和可信的长期 URL。推荐保存 `bucket`、`region`、`key`、`hash`、`size`、`type`、`media`、`publicUrl`、`status`、`ownerId`、`createdAt`、`updatedAt` 等字段。
 
 ## 6. 核心逻辑伪代码
 
@@ -308,7 +303,6 @@ const record = await reportCompletedUpload({
   bucket: uploadResult.bucket,
   region: uploadResult.region,
   eTag: uploadResult.eTag,
-  location: uploadResult.location,
   media
 });
 
@@ -342,7 +336,7 @@ async function completeUpload(input: UploadCompletedReportInput, user: CurrentUs
     ...input,
     ownerId: user.id,
     status: 'available',
-    publicUrl: createPublicUrl(input.key)
+    publicUrl: createBackendPublicUrl(input.bucket, input.region, input.key)
   });
 }
 ```

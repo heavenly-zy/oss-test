@@ -64,13 +64,16 @@ async function getOSSToken() {
   };
 }
 
-interface S3UploadConfig {
+interface UploadTargetConfig {
   bucket: string;
   region: string;
-  endpoint: string | null;
+  endpoint?: string;
   basePath: string;
-  publicBaseUrl: string | null;
   forcePathStyle: boolean;
+}
+
+interface S3UploadConfig extends UploadTargetConfig {
+  publicBaseUrl: string;
 }
 
 class S3UploadConfigError extends Error {
@@ -106,8 +109,6 @@ interface UploadedVideoFrameReport {
 
 interface UploadedVideoFrameRecord extends UploadedVideoFrameReport {
   publicUrl?: string;
-  url?: string;
-  urlKind?: 'public' | 'signed';
 }
 
 interface UploadMediaMetadataReport {
@@ -125,7 +126,6 @@ interface UploadMediaMetadataRecord extends Omit<UploadMediaMetadataReport, 'fir
 
 interface UploadCompletedReportInput extends UploadIdentityInput {
   eTag?: string;
-  location?: string;
   media?: UploadMediaMetadataReport;
 }
 
@@ -134,7 +134,6 @@ interface UploadCompletedRecord {
   region: string;
   key: string;
   eTag?: string;
-  location?: string;
   publicUrl?: string;
   media?: UploadMediaMetadataRecord;
 }
@@ -148,6 +147,9 @@ interface StoredUploadRecord extends UploadIdentityInput, UploadCompletedRecord 
 interface ObjectMeta {
   size: number;
   eTag?: string;
+  contentType?: string;
+  contentDisposition?: string;
+  metadata: Record<string, string>;
 }
 
 class S3UploadRequestError extends Error {
@@ -183,8 +185,13 @@ async function getS3StsToken() {
       accessKeySecret: result.credentials.AccessKeySecret,
       expiresAt: result.credentials.Expiration,
     },
-    upload: uploadConfig,
+    upload: toUploadTargetConfig(uploadConfig),
   };
+}
+
+function toUploadTargetConfig(config: S3UploadConfig): UploadTargetConfig {
+  const { publicBaseUrl: _publicBaseUrl, ...upload } = config;
+  return upload;
 }
 
 function getS3UploadConfig(): S3UploadConfig {
@@ -195,9 +202,6 @@ function getS3UploadConfig(): S3UploadConfig {
     readOptionalEnv('S3_BASE_PATH') ??
       readOptionalEnv('OSS_UPLOAD_DIR') ??
       DEFAULT_S3_BASE_PATH
-  );
-  const publicBaseUrl = normalizeOptionalUrl(
-    readOptionalEnv('S3_PUBLIC_BASE_URL') ?? readOptionalEnv('PUBLIC_BASE_URL')
   );
   const forcePathStyle = readBooleanEnv('S3_FORCE_PATH_STYLE', false);
   const missingFields = [
@@ -212,18 +216,26 @@ function getS3UploadConfig(): S3UploadConfig {
   return {
     bucket: bucket!,
     region: region!,
-    endpoint,
+    ...(endpoint ? { endpoint } : {}),
     basePath,
-    publicBaseUrl,
+    publicBaseUrl: getS3PublicBaseUrl(bucket!, region!),
     forcePathStyle,
   };
 }
 
-function getS3Endpoint(region: string | undefined): string | null {
+function getS3Endpoint(region: string | undefined): string | undefined {
   const configuredEndpoint = normalizeOptionalUrl(process.env.S3_ENDPOINT);
   if (configuredEndpoint) return configuredEndpoint;
 
-  return region ? `https://s3.${region}.aliyuncs.com` : null;
+  return region ? `https://s3.${region}.aliyuncs.com` : undefined;
+}
+
+function getS3PublicBaseUrl(bucket: string, region: string): string {
+  const configuredBaseUrl = normalizeOptionalUrl(
+    readOptionalEnv('S3_PUBLIC_BASE_URL') ?? readOptionalEnv('PUBLIC_BASE_URL')
+  );
+
+  return configuredBaseUrl ?? `https://${bucket}.${region}.aliyuncs.com`;
 }
 
 function createS3MultipartUploadPolicy(config: S3UploadConfig) {
@@ -348,7 +360,6 @@ function normalizeCompleteInput(value: unknown): UploadCompletedReportInput {
   return {
     ...readUploadIdentity(input),
     eTag: readOptionalString(input, 'eTag'),
-    location: readOptionalString(input, 'location'),
     media: readMedia(input.media),
   };
 }
@@ -511,6 +522,9 @@ async function getRemoteObjectMeta(
     return {
       size,
       eTag: readHeader(result.res.headers, 'etag'),
+      contentType: readHeader(result.res.headers, 'content-type'),
+      contentDisposition: readHeader(result.res.headers, 'content-disposition'),
+      metadata: readObjectMetadata(result.res.headers),
     };
   } catch (error) {
     if (isObjectNotFoundError(error)) {
@@ -534,9 +548,110 @@ function isObjectNotFoundError(error: unknown): boolean {
   return maybeError?.status === 404 || maybeError?.code === 'NoSuchKey';
 }
 
-function createPublicUrl(publicBaseUrl: string | null, key: string): string | undefined {
-  if (!publicBaseUrl) return undefined;
+function createPublicUrl(publicBaseUrl: string, key: string): string {
   return `${publicBaseUrl}/${key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function readObjectMetadata(
+  headers: Record<string, string | string[] | undefined>
+): Record<string, string> {
+  const metadata: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    const normalizedKey = key.toLowerCase();
+    if (!normalizedKey.startsWith('x-oss-meta-')) continue;
+
+    const metadataValue = Array.isArray(value) ? value[0] : value;
+    if (metadataValue !== undefined) {
+      metadata[normalizedKey.slice('x-oss-meta-'.length)] = metadataValue;
+    }
+  }
+
+  return metadata;
+}
+
+async function createPublicObjectKey(
+  config: S3UploadConfig,
+  input: UploadCompletedReportInput,
+  object: ObjectMeta
+): Promise<string> {
+  const publicKey = createDownloadObjectKey(input.key, input.name);
+  if (publicKey === input.key) return input.key;
+
+  await copyObject(config, input.key, publicKey, {
+    contentDisposition: createAttachmentDisposition(input.name),
+    contentType: object.contentType || input.type || 'application/octet-stream',
+    metadata: {
+      ...object.metadata,
+      originalname: object.metadata.originalname ?? encodeURIComponent(input.name),
+    },
+  });
+
+  return publicKey;
+}
+
+function createDownloadObjectKey(key: string, fileName: string): string {
+  if (hasFileExtension(key)) return key;
+
+  const extension = getFileExtension(fileName);
+  return extension ? `${key}${extension}` : key;
+}
+
+function hasFileExtension(value: string): boolean {
+  return getFileExtension(value) !== '';
+}
+
+function getFileExtension(value: string): string {
+  const lastSegment = value.split(/[\\/]/).pop() ?? '';
+  const match = lastSegment.match(/(\.[^./\\]+)$/);
+  return match?.[1] ?? '';
+}
+
+function createAttachmentDisposition(fileName: string): string {
+  const fallbackName = createAsciiFileName(fileName);
+  return `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeRFC5987Value(fileName)}`;
+}
+
+function createAsciiFileName(fileName: string): string {
+  const name = fileName
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\x00-\x1f\x7f"\\]/g, '_')
+    .trim();
+
+  return name || 'download';
+}
+
+function encodeRFC5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
+async function copyObject(
+  config: S3UploadConfig,
+  sourceKey: string,
+  targetKey: string,
+  options: {
+    contentDisposition: string;
+    contentType: string;
+    metadata: Record<string, string>;
+  }
+): Promise<void> {
+  const client = new OSS({
+    region: config.region,
+    bucket: config.bucket,
+    accessKeyId: ACCESS_KEY_ID,
+    accessKeySecret: ACCESS_KEY_SECRET,
+  });
+
+  await client.copy(targetKey, sourceKey, {
+    headers: {
+      'Content-Disposition': options.contentDisposition,
+      'Content-Type': options.contentType,
+    },
+    meta: options.metadata,
+  });
 }
 
 async function toMediaRecord(
@@ -551,13 +666,7 @@ async function toMediaRecord(
   const firstFrame: UploadedVideoFrameRecord = {
     ...media.firstFrame,
     eTag: media.firstFrame.eTag ?? frameObject.eTag,
-    ...(publicUrl
-      ? {
-          publicUrl,
-          url: publicUrl,
-          urlKind: 'public' as const,
-        }
-      : {}),
+    publicUrl,
   };
 
   return {
@@ -573,7 +682,6 @@ function toCompletedRecord(record: StoredUploadRecord): UploadCompletedRecord {
     region: record.region,
     key: record.key,
     eTag: record.eTag,
-    location: record.location,
     publicUrl: record.publicUrl,
     media: record.media,
   };
@@ -677,11 +785,11 @@ app.post('/api/s3-upload-complete', async (c: Context) => {
     const key = recordKey(input);
     const existing = completedUploads.get(key);
     const media = await toMediaRecord(input.media);
+    const publicObjectKey = await createPublicObjectKey(config, input, object);
     const record: StoredUploadRecord = {
       ...input,
       eTag: input.eTag ?? object.eTag ?? existing?.eTag,
-      location: input.location ?? existing?.location,
-      publicUrl: createPublicUrl(config.publicBaseUrl, input.key),
+      publicUrl: createPublicUrl(config.publicBaseUrl, publicObjectKey),
       media: media ?? existing?.media,
       status: 'available',
       createdAt: existing?.createdAt ?? now,

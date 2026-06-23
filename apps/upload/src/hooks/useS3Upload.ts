@@ -29,6 +29,27 @@ interface UseS3UploadReturn {
 const PART_SIZE = 10 * 1024 * 1024;
 const QUEUE_SIZE = 4;
 
+function createContentDisposition(fileName: string): string {
+  const fallbackName = createAsciiFileName(fileName);
+  return `inline; filename="${fallbackName}"; filename*=UTF-8''${encodeRFC5987Value(fileName)}`;
+}
+
+function createAsciiFileName(fileName: string): string {
+  const name = fileName
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\x00-\x1f\x7f"\\]/g, '_')
+    .trim();
+
+  return name || 'download';
+}
+
+function encodeRFC5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
 export function useS3Upload(): UseS3UploadReturn {
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [progress, setProgress] = useState<UploadProgress>({
@@ -135,6 +156,7 @@ export function useS3Upload(): UseS3UploadReturn {
           Key: uploadToken.objectKey,
           Body: file,
           ContentType: file.type || 'application/octet-stream',
+          ContentDisposition: createContentDisposition(file.name),
         },
         partSize: PART_SIZE,
         queueSize: QUEUE_SIZE,

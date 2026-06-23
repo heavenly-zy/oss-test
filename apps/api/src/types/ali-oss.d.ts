@@ -32,6 +32,19 @@ declare module 'ali-oss' {
     };
   }
 
+  export interface CopyObjectOptions {
+    headers?: Record<string, string>;
+    meta?: Record<string, string>;
+  }
+
+  export interface CopyObjectResult {
+    data?: {
+      etag?: string;
+      lastModified?: string;
+    };
+    res: unknown;
+  }
+
   export class STS {
     constructor(options: STSOptions);
     assumeRole(
@@ -46,6 +59,7 @@ declare module 'ali-oss' {
     static STS: typeof STS;
 
     constructor(options: OSSOptions);
+    copy(name: string, sourceName: string, options?: CopyObjectOptions): Promise<CopyObjectResult>;
     getObjectMeta(name: string, options?: object): Promise<ObjectMetaResult>;
     signPostObjectPolicyV4(policy: object | string, date: Date): string;
   }
