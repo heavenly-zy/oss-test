@@ -84,7 +84,6 @@ class S3UploadConfigError extends Error {
 
 interface ApiResponse<T> {
   code: number;
-  message: string;
   data: T;
 }
 
@@ -95,19 +94,17 @@ interface UploadIdentityInput {
   bucket: string;
   region: string;
   key: string;
-  name: string;
-  type: string;
-  lastModified: number;
 }
 
 interface UploadedVideoFrameReport {
+  key: string;
+}
+
+interface UploadedVideoFrameRecord {
   bucket: string;
   region: string;
   key: string;
   eTag?: string;
-}
-
-interface UploadedVideoFrameRecord extends UploadedVideoFrameReport {
   publicUrl?: string;
 }
 
@@ -125,7 +122,6 @@ interface UploadMediaMetadataRecord extends Omit<UploadMediaMetadataReport, 'fir
 }
 
 interface UploadCompletedReportInput extends UploadIdentityInput {
-  eTag?: string;
   media?: UploadMediaMetadataReport;
 }
 
@@ -183,7 +179,7 @@ async function getS3StsToken() {
       securityToken: result.credentials.SecurityToken,
       accessKeyId: result.credentials.AccessKeyId,
       accessKeySecret: result.credentials.AccessKeySecret,
-      expiresAt: result.credentials.Expiration,
+      expiresAt: Date.parse(result.credentials.Expiration),
     },
     upload: toUploadTargetConfig(uploadConfig),
   };
@@ -313,7 +309,6 @@ function createMultipartUploadPolicy() {
 function ok<T>(c: Context, data: T) {
   return c.json({
     code: 0,
-    message: 'ok',
     data,
   } satisfies ApiResponse<T>);
 }
@@ -323,7 +318,6 @@ function requestFailed(c: Context, error: unknown) {
     return c.json(
       {
         code: error.status,
-        message: error.message,
         data: null,
       } satisfies ApiResponse<null>,
       error.status
@@ -334,7 +328,6 @@ function requestFailed(c: Context, error: unknown) {
     return c.json(
       {
         code: 500,
-        message: `S3 upload config is incomplete: Missing ${error.missingFields.join(', ')}`,
         data: null,
       } satisfies ApiResponse<null>,
       500
@@ -344,7 +337,6 @@ function requestFailed(c: Context, error: unknown) {
   return c.json(
     {
       code: 500,
-      message: error instanceof Error ? error.message : 'Unknown error',
       data: null,
     } satisfies ApiResponse<null>,
     500
@@ -359,7 +351,6 @@ function normalizeCompleteInput(value: unknown): UploadCompletedReportInput {
   const input = requirePlainObject(value);
   return {
     ...readUploadIdentity(input),
-    eTag: readOptionalString(input, 'eTag'),
     media: readMedia(input.media),
   };
 }
@@ -376,9 +367,6 @@ function readUploadIdentity(input: Record<string, unknown>): UploadIdentityInput
     bucket: readRequiredString(input, 'bucket'),
     region: readRequiredString(input, 'region'),
     key: readRequiredString(input, 'key'),
-    name: readRequiredString(input, 'name'),
-    type: readString(input, 'type'),
-    lastModified: readSafeInteger(input, 'lastModified', 0),
   };
 }
 
@@ -407,10 +395,7 @@ function readVideoFrame(value: unknown): UploadedVideoFrameReport | undefined {
 
   const frame = requirePlainObject(value);
   return {
-    bucket: readRequiredString(frame, 'bucket'),
-    region: readRequiredString(frame, 'region'),
     key: readRequiredString(frame, 'key'),
-    eTag: readOptionalString(frame, 'eTag'),
   };
 }
 
@@ -438,19 +423,6 @@ function readRequiredString(input: Record<string, unknown>, key: string): string
   }
 
   return value;
-}
-
-function readOptionalString(
-  input: Record<string, unknown>,
-  key: string
-): string | undefined {
-  const value = input[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') {
-    throw new S3UploadRequestError(400, `${key} must be a string`);
-  }
-
-  return value.trim() || undefined;
 }
 
 function readSafeInteger(
@@ -575,26 +547,41 @@ async function createPublicObjectKey(
   input: UploadCompletedReportInput,
   object: ObjectMeta
 ): Promise<string> {
-  const publicKey = createDownloadObjectKey(input.key, input.name);
+  const originalName = readOriginalName(object.metadata);
+  if (!originalName) return input.key;
+
+  const publicKey = createDownloadObjectKey(input.key, originalName);
   if (publicKey === input.key) return input.key;
 
   await copyObject(config, input.key, publicKey, {
-    contentDisposition: createAttachmentDisposition(input.name),
-    contentType: object.contentType || input.type || 'application/octet-stream',
+    contentDisposition: createAttachmentDisposition(originalName),
+    contentType: object.contentType || 'application/octet-stream',
     metadata: {
       ...object.metadata,
-      originalname: object.metadata.originalname ?? encodeURIComponent(input.name),
+      originalname: object.metadata.originalname ?? encodeURIComponent(originalName),
     },
   });
 
   return publicKey;
 }
 
-function createDownloadObjectKey(key: string, fileName: string): string {
+function createDownloadObjectKey(key: string, fileName: string | undefined): string {
   if (hasFileExtension(key)) return key;
+  if (!fileName) return key;
 
   const extension = getFileExtension(fileName);
   return extension ? `${key}${extension}` : key;
+}
+
+function readOriginalName(metadata: Record<string, string>): string | undefined {
+  const rawName = metadata.originalname;
+  if (!rawName) return undefined;
+
+  try {
+    return decodeURIComponent(rawName);
+  } catch {
+    return rawName;
+  }
 }
 
 function hasFileExtension(value: string): boolean {
@@ -655,17 +642,30 @@ async function copyObject(
 }
 
 async function toMediaRecord(
+  config: S3UploadConfig,
   media: UploadMediaMetadataReport | undefined
 ): Promise<UploadMediaMetadataRecord | undefined> {
   if (!media) return undefined;
-  if (!media.firstFrame) return media;
+  if (!media.firstFrame) {
+    return {
+      type: media.type,
+      resolution: media.resolution,
+    };
+  }
 
-  const frameConfig = assertUploadTargetAllowed(media.firstFrame);
-  const frameObject = await getRemoteObjectMeta(frameConfig, media.firstFrame.key);
-  const publicUrl = createPublicUrl(frameConfig.publicBaseUrl, media.firstFrame.key);
+  assertUploadTargetAllowed({
+    bucket: config.bucket,
+    region: config.region,
+    key: media.firstFrame.key,
+  });
+
+  const frameObject = await getRemoteObjectMeta(config, media.firstFrame.key);
+  const publicUrl = createPublicUrl(config.publicBaseUrl, media.firstFrame.key);
   const firstFrame: UploadedVideoFrameRecord = {
-    ...media.firstFrame,
-    eTag: media.firstFrame.eTag ?? frameObject.eTag,
+    bucket: config.bucket,
+    region: config.region,
+    key: media.firstFrame.key,
+    eTag: frameObject.eTag,
     publicUrl,
   };
 
@@ -708,30 +708,13 @@ app.get('/api/oss-token', async (c: Context) => {
   }
 });
 
-app.get('/api/s3-sts-token', async (c: Context) => {
+app.post('/api/s3-sts-token', async (c: Context) => {
   try {
-    return c.json(await getS3StsToken(), 200, {
-      'Cache-Control': 'no-store',
-    });
+    c.header('Cache-Control', 'no-store');
+    return ok(c, await getS3StsToken());
   } catch (error) {
     console.error('Get S3 STS token failed:', error);
-    if (error instanceof S3UploadConfigError) {
-      return c.json(
-        {
-          message: 'S3 upload config is incomplete',
-          error: `Missing ${error.missingFields.join(', ')}`,
-        },
-        500
-      );
-    }
-
-    return c.json(
-      {
-        message: 'Failed to get S3 STS token',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500
-    );
+    return requestFailed(c, error);
   }
 });
 
@@ -784,11 +767,11 @@ app.post('/api/s3-upload-complete', async (c: Context) => {
     const now = Date.now();
     const key = recordKey(input);
     const existing = completedUploads.get(key);
-    const media = await toMediaRecord(input.media);
+    const media = await toMediaRecord(config, input.media);
     const publicObjectKey = await createPublicObjectKey(config, input, object);
     const record: StoredUploadRecord = {
       ...input,
-      eTag: input.eTag ?? object.eTag ?? existing?.eTag,
+      eTag: object.eTag ?? existing?.eTag,
       publicUrl: createPublicUrl(config.publicBaseUrl, publicObjectKey),
       media: media ?? existing?.media,
       status: 'available',

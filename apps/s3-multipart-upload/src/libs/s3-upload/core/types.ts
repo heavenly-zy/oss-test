@@ -17,6 +17,7 @@ export interface S3StsToken {
   accessKeyId: string;
   /** 临时 AccessKeySecret，对应 AWS SDK v3 credentials.secretAccessKey。 */
   accessKeySecret: string;
+  expiresAt: number;
 }
 
 /** 后端下发的上传目标配置。 */

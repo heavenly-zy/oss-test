@@ -23,6 +23,11 @@ import type {
   StoredPart,
 } from '../core/types';
 
+type ApiPayload<T> = T | {
+  code?: number;
+  data?: T;
+};
+
 /**
  * 将 Blob/File 转为 AWS SDK v3 在浏览器端最稳定的字节数组请求体。
  *
@@ -60,6 +65,14 @@ function encodeRFC5987Value(value: string): string {
   );
 }
 
+function unwrapApiData<T>(payload: ApiPayload<T>): T {
+  if (payload && typeof payload === 'object' && 'data' in payload && payload.data !== undefined) {
+    return payload.data as T;
+  }
+
+  return payload as T;
+}
+
 /**
  * 从后端获取 STS 上传会话。
  *
@@ -75,12 +88,18 @@ export async function fetchS3StsSession(url: string): Promise<S3StsSession> {
     throw new Error(`获取 STS 临时凭证失败，HTTP ${response.status}：${text || response.statusText}`);
   }
 
-  const session = JSON.parse(text) as Partial<S3StsSession>;
+  const payload = JSON.parse(text) as ApiPayload<Partial<S3StsSession>>;
+  const session = unwrapApiData(payload);
   const credentials = session.credentials;
   const upload = session.upload;
 
-  if (!credentials?.securityToken || !credentials.accessKeyId || !credentials.accessKeySecret) {
-    throw new Error('STS 接口必须返回 credentials.securityToken、credentials.accessKeyId、credentials.accessKeySecret。');
+  if (
+    !credentials?.securityToken ||
+    !credentials.accessKeyId ||
+    !credentials.accessKeySecret ||
+    typeof credentials.expiresAt !== 'number'
+  ) {
+    throw new Error('STS 接口必须返回 credentials.securityToken、credentials.accessKeyId、credentials.accessKeySecret、credentials.expiresAt。');
   }
 
   if (

@@ -113,12 +113,11 @@ flowchart TD
 ```ts
 export interface ApiResponse<T> {
   code: number;
-  message: string;
   data: T;
 }
 ```
 
-前端 fetcher 可以在开发阶段兼容 `{ code, message, data }` 和直接返回 `data` 两种格式，但真实接口建议统一返回 `ApiResponse<T>`。
+前端 fetcher 可以在开发阶段兼容 `{ code, data }` 和直接返回 `data` 两种格式，但真实接口建议统一返回 `ApiResponse<T>`。
 
 ### 5.2 `/api/s3-sts-token`
 
@@ -129,7 +128,7 @@ export interface TemporaryCredentials {
   securityToken: string;
   accessKeyId: string;
   accessKeySecret: string;
-  expiresAt: string;
+  expiresAt: number;
 }
 
 export interface UploadTargetConfig {
@@ -172,9 +171,6 @@ export interface UploadCompletedLookupRequest {
   bucket: string;
   region: string;
   key: string;
-  name: string;
-  type: string;
-  lastModified: number;
 }
 ```
 
@@ -231,10 +227,6 @@ export interface UploadCompletedReportInput {
   bucket: string;
   region: string;
   key: string;
-  name: string;
-  type: string;
-  lastModified: number;
-  eTag?: string;
   media?: UploadMediaMetadataReport;
 }
 
@@ -248,10 +240,7 @@ export interface UploadMediaMetadataReport {
 }
 
 export interface UploadedVideoFrameReport {
-  bucket: string;
-  region: string;
   key: string;
-  eTag?: string;
 }
 ```
 
@@ -265,10 +254,11 @@ type UploadCompletedReportApiResponse = ApiResponse<UploadCompletedRecord>;
 
 - 接口必须是幂等的。相同 `algorithm + hash + size + bucket + region + key` 重复提交时，应返回同一条记录或更新必要 metadata。
 - 后端必须调用 `HeadObject` 校验主对象存在，并校验 `ContentLength === size`。
+- 默认完成登记请求不接收浏览器 `File.name`、`File.type`、`File.lastModified` 或前端上传结果里的 `ETag`；如果业务需要保存对象名称、ContentType 或 ETag，应以后端 `HeadObject` 和对象元数据为准。
 - `ETag` 可以保存，但不能把它当成全量文件 MD5。multipart upload、服务端加密或兼容存储实现都会让 ETag 语义变化。
 - 如果请求包含 `media.firstFrame`，后端也应对首帧对象调用 `HeadObject`，确认对象存在。
 - `media.resolution` 当前由前端从浏览器 File 读取，后端可以作为业务元数据保存；如果未来用于审核、计费或强校验，应由后端异步解析媒体文件后再确认。
-- 后端应生成并保存稳定对象标识和可信的长期 URL。推荐保存 `bucket`、`region`、`key`、`hash`、`size`、`type`、`media`、`publicUrl`、`status`、`ownerId`、`createdAt`、`updatedAt` 等字段。
+- 后端应生成并保存稳定对象标识和可信的长期 URL。推荐保存 `bucket`、`region`、`key`、`hash`、`size`、`contentType`、`eTag`、`media`、`publicUrl`、`status`、`ownerId`、`createdAt`、`updatedAt` 等字段，其中 `contentType` 和 `eTag` 来自后端对象校验结果。
 
 ## 6. 核心逻辑伪代码
 
@@ -282,7 +272,10 @@ const preparedMedia = isMediaUpload
   : undefined;
 
 const completed = await findCompletedUpload({
-  ...identity,
+  algorithm: identity.algorithm,
+  hash: identity.hash,
+  size: identity.size,
+  key: identity.key,
   bucket: session.upload.bucket,
   region: session.upload.region,
   signal
@@ -299,10 +292,12 @@ const media = preparedMedia
   : undefined;
 
 const record = await reportCompletedUpload({
-  ...identity,
+  algorithm: identity.algorithm,
+  hash: identity.hash,
+  size: identity.size,
+  key: identity.key,
   bucket: uploadResult.bucket,
   region: uploadResult.region,
-  eTag: uploadResult.eTag,
   media
 });
 
@@ -327,7 +322,7 @@ async function completeUpload(input: UploadCompletedReportInput, user: CurrentUs
 
   if (input.media?.firstFrame) {
     await s3.headObject({
-      Bucket: input.media.firstFrame.bucket,
+      Bucket: input.bucket,
       Key: input.media.firstFrame.key
     });
   }
